@@ -1,0 +1,16 @@
+build/
+dist/
+
+# CMake
+CMakeFiles/
+CMakeCache.txt
+cmake_install.cmake
+compile_commands.json
+.ninja_deps
+.ninja_log
+
+# IDE and temporary files
+.idea/
+.vscode/
+*.swp
+*~

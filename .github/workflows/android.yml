@@ -1,0 +1,48 @@
+name: LeviMusic Android Build
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout LeviMusic
+        uses: actions/checkout@v4
+
+      - name: Checkout Preloader SDK
+        uses: actions/checkout@v4
+        with:
+          repository: LiteLDev/preloader-android
+          ref: 99c0ae753a4623b8482dde6f4d59cf442283375d
+          path: preloader
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install Android NDK
+        run: sdkmanager "ndk;28.2.13676358"
+
+      - name: Configure CMake
+        run: |
+          cmake -S . -B build -G Ninja \
+            -DCMAKE_TOOLCHAIN_FILE="$ANDROID_HOME/ndk/28.2.13676358/build/cmake/android.toolchain.cmake" \
+            -DANDROID_ABI=arm64-v8a \
+            -DANDROID_PLATFORM=android-28 \
+            -DPRELOADER_ANDROID_ROOT="$GITHUB_WORKSPACE/preloader"
+
+      - name: Build LeviMusic
+        run: cmake --build build --target levi_music --parallel 2
+
+      - name: Upload native library
+        uses: actions/upload-artifact@v4
+        with:
+          name: LeviMusic-ARM64
+          path: build/out/arm64-v8a/liblevi_music.so
+          if-no-files-found: error

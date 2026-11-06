@@ -1,0 +1,8 @@
+{
+    "type": "preload-native",
+    "name": "LeviMusic",
+    "author": "dip-playzzz",
+    "version": "1.0.0",
+    "entry": "liblevi_music.so",
+    "minecraft_versions": []
+}
