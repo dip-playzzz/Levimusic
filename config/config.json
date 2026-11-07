@@ -1,0 +1,25 @@
+{
+  "music_directories": [
+    "/storage/emulated/0/Music",
+    "/storage/emulated/0/Download",
+    "/storage/emulated/0/Downloads"
+  ],
+  "selected_audio": "",
+  "max_tracks": 1024,
+  "ui_width": 2400,
+  "ui_height": 1080,
+  "volume_percent": 80,
+  "ui_opacity_percent": 92,
+  "ui_scale_percent": 100,
+  "auto_resolution_scale": false,
+  "ui_mode": 0,
+  "loop_mode": 0,
+  "shuffle_enabled": false,
+  "ui_panel_x": 0,
+  "ui_panel_y": 0,
+  "ui_panel_position_saved": false,
+  "ui_sort_mode": 0,
+  "ui_page": 0,
+  "ui_source_offset": 0,
+  "ui_active_playlist": ""
+}

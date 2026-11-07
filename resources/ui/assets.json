@@ -1,0 +1,42 @@
+{
+  "panel.rgba": {
+    "width": 900,
+    "height": 560,
+    "bytes": 2016000
+  },
+  "titlebar.rgba": {
+    "width": 864,
+    "height": 54,
+    "bytes": 186624
+  },
+  "row.rgba": {
+    "width": 852,
+    "height": 44,
+    "bytes": 149952
+  },
+  "button.rgba": {
+    "width": 128,
+    "height": 40,
+    "bytes": 20480
+  },
+  "focus_row.rgba": {
+    "width": 852,
+    "height": 44,
+    "bytes": 149952
+  },
+  "chevron_left.rgba": {
+    "width": 16,
+    "height": 28,
+    "bytes": 1792
+  },
+  "chevron_right.rgba": {
+    "width": 16,
+    "height": 28,
+    "bytes": 1792
+  },
+  "focus_button.rgba": {
+    "width": 128,
+    "height": 40,
+    "bytes": 20480
+  }
+}

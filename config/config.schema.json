@@ -1,0 +1,114 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "LeviMusic configuration",
+  "type": "object",
+  "properties": {
+    "music_directories": {
+      "description": "Every audio directory or audio-file path listed here becomes a live library source. Non-empty sources automatically appear as tabs named from the final folder or file path component. Edit this array directly; the mod detects and hot reloads changes without a button.",
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "maxItems": 24
+    },
+    "selected_audio": {
+      "type": "string"
+    },
+    "max_tracks": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 1024
+    },
+    "ui_width": {
+      "type": "integer",
+      "minimum": 640,
+      "maximum": 4096
+    },
+    "ui_height": {
+      "type": "integer",
+      "minimum": 360,
+      "maximum": 4096
+    },
+    "volume_percent": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 100
+    },
+    "ui_opacity_percent": {
+      "type": "integer",
+      "minimum": 20,
+      "maximum": 100
+    },
+    "ui_scale_percent": {
+      "type": "integer",
+      "minimum": 40,
+      "maximum": 150
+    },
+    "auto_resolution_scale": {
+      "type": "boolean",
+      "default": false
+    },
+    "ui_mode": {
+      "description": "0 = Follow System, 1 = Dark Mode, 2 = Light Mode.",
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 2,
+      "default": 0
+    },
+    "loop_mode": {
+      "description": "0 = off, 1 = loop all tracks in the current tab, 2 = loop one.",
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 2
+    },
+    "shuffle_enabled": {
+      "type": "boolean"
+    },
+    "ui_panel_x": {
+      "description": "Auto-saved panel X position in screen pixels.",
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 16384,
+      "default": 0
+    },
+    "ui_panel_y": {
+      "description": "Auto-saved panel Y position in screen pixels.",
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 16384,
+      "default": 0
+    },
+    "ui_panel_position_saved": {
+      "description": "True after the panel has a persisted position.",
+      "type": "boolean",
+      "default": false
+    },
+    "ui_sort_mode": {
+      "description": "Auto-saved library sort mode: 0 custom/scan order, 1 title A-Z, 2 artist A-Z.",
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 2,
+      "default": 0
+    },
+    "ui_page": {
+      "description": "Auto-saved current track-list page.",
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 4096,
+      "default": 0
+    },
+    "ui_source_offset": {
+      "description": "Auto-saved playlist sidebar scroll offset.",
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 4096,
+      "default": 0
+    },
+    "ui_active_playlist": {
+      "description": "Auto-saved active playlist/folder path. Empty means All.",
+      "type": "string",
+      "default": ""
+    }
+  },
+  "additionalProperties": false
+}

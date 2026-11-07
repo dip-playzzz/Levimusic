@@ -1,0 +1,21 @@
+{
+  "preloader": {
+    "file": "libpreloader.so",
+    "sha256": "3464d43616f8e1c5d9fba8ddfd68c0ed967b46760c1b5c895a4a10ddf1dacb06",
+    "gnu_build_id": "5790e73466e108098540d65efd7898e2c1a0490a",
+    "architecture": "AArch64",
+    "ndk": "Android clang 18.0.2 (r522817b)",
+    "abi": {
+      "ModuleInfo": 272,
+      "ConfigEntry": 152,
+      "DrawCommand": 112,
+      "PreloaderInput_Interface": 48
+    },
+    "verified_with": "tools/verify_preloader.sh"
+  },
+  "notes": [
+    "Verified exports: GetPreloaderInput, pl_hook, pl_unhook, pl::modmenu::{registerModule,unregisterModule,setModuleEnabled,submitDrawCommands,registerImage}, ExternalModBridge nativeSetExternalModConfig/nativeToggleExternalMod.",
+    "DWARF member offsets of DrawCommand (text@40, fontId@64, imageId@88) and ModuleInfo (configs@104, onToggle@128, onConfigChanged@176, onKeybind@224) match include/LeviAbi.hpp.",
+    "LeviMusic does not link or patch libminecraftpe.so, so it has no Minecraft build dependency; manifest minecraft_versions is empty (no version restriction)."
+  ]
+}
