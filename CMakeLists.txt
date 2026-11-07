@@ -81,14 +81,8 @@ if(NOT ANDROID)
 endif()
 
 if(ANDROID)
-    option(LEVIMUSIC_LINK_PRELOADER
-           "Build and link the local preloader target for this example"
-           ON)
-
-    if(LEVIMUSIC_LINK_PRELOADER AND NOT TARGET preloader)
-        add_subdirectory("${PRELOADER_ANDROID_ROOT}"
-                         "${CMAKE_BINARY_DIR}/_preloader_android")
-    endif()
+    # Use the preloader already loaded by LeviLaunchroid.
+    # PRELOADER_ANDROID_ROOT is used for SDK headers only.
 
     if(ANDROID_ABI)
         set(LEVIMUSIC_OUTPUT_ABI "${ANDROID_ABI}")
@@ -111,10 +105,7 @@ if(ANDROID)
         target_link_libraries(levi_music PRIVATE "${LL_LOG_LIB}")
     endif()
 
-    if(TARGET preloader)
-        target_link_libraries(levi_music PRIVATE preloader)
-    else()
-        target_link_options(levi_music PRIVATE
-            -Wl,--unresolved-symbols=ignore-all)
-    endif()
+    # Resolve exported preloader API symbols from the launcher's runtime.
+    target_link_options(levi_music PRIVATE
+        -Wl,--unresolved-symbols=ignore-all)
 endif()
