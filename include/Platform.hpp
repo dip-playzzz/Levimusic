@@ -34,6 +34,7 @@ long write(int, const void*, usize);
 int close(int);
 int mkdir(const char*, unsigned int);
 int rename(const char*, const char*);
+int unlink(const char*);
 
 struct DIR;
 struct DirEnt {

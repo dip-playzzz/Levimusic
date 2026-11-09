@@ -18,6 +18,9 @@ public:
     bool initialize(jni::Vm* vm);
     void shutdown();
     bool play(const char* path);
+    // Opens `source` (file path or http(s) URL) but reports `identity` as the
+    // current path, so library lookups keep working for cached/streamed audio.
+    bool playAs(const char* source, const char* identity);
     bool pause();
     bool resume();
     void stop();

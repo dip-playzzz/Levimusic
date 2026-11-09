@@ -1,4 +1,5 @@
 #include "LeviMusicMod.hpp"
+#include "Online.hpp"
 #include "JniBridge.hpp"
 
 static LeviMusicMod gLeviMusicMod;
@@ -201,6 +202,13 @@ bool LeviMusicMod::enable(void* context) {
         return false;
     }
 
+    if (mConfig.config().onlineEnabled) {
+        char cacheDir[640];
+        snprintf(cacheDir, sizeof(cacheDir), "%s/cache", mConfig.modRoot());
+        if (!online::start(&mPlayer, cacheDir))
+            levi_log(LOG_ERROR_VALUE, LogTag, "online service failed to start");
+    }
+
     mEnabled = true;
     mUi.forceDisabledDefault();
     levi_log(LOG_INFO_VALUE, LogTag,
@@ -210,6 +218,7 @@ bool LeviMusicMod::enable(void* context) {
 
 bool LeviMusicMod::disable(void*) {
     if (!mEnabled) return true;
+    online::shutdown();
     mConfigHook.shutdown();
     mToggleHook.shutdown();
     mUi.shutdown();

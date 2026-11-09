@@ -16,6 +16,7 @@ struct LeviMusicConfig {
     int uiMode; // 0=follow system, 1=dark, 2=light
     int loopMode; // 0=off, 1=all, 2=one
     bool shuffleEnabled;
+    bool onlineEnabled; // search + stream/cached online playback
 
     // Persisted panel/UI state. The panel stays disabled by default; only its
     // geometry/navigation state is restored when the user opens it again.

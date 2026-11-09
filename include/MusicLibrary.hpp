@@ -1,6 +1,19 @@
 #pragma once
 #include "Config.hpp"
 
+// Online tracks live in the library as ordinary tracks whose path is not a file:
+//   "yt:<videoId>"  resolved + cached by the online service on play
+//   "url:<http..>"  streamed directly by the Android MediaPlayer
+inline bool isOnlinePath(const char* path) {
+    return path && (strncmp(path, "yt:", 3) == 0 || strncmp(path, "url:", 4) == 0);
+}
+
+struct OnlineEntry {
+    char path[512];
+    char title[256];
+    char artist[160];
+};
+
 struct MusicSource {
     char path[512];
     char label[64];
@@ -42,6 +55,12 @@ public:
     int globalIndexForPath(const char* path) const;
     int sourceIndexForPath(const char* path) const;
 
+    static constexpr int MaxOnlineEntries = 40;
+    static constexpr const char* OnlineSourcePath = "online:";
+    // Replaces the "Online" playlist (kept across rescans). Pass 0 to remove it.
+    void setOnlineEntries(const OnlineEntry* entries, int count);
+    int onlineSourceIndex() const { return mOnlineSource; }
+
 private:
     int addSource(const char* path, bool configured);
     void scanConfiguredPath(const char* path,
@@ -52,6 +71,13 @@ private:
     bool accepted(const char* path) const;
     void removeEmptySources();
 
+    void applyOnline();
+
+    OnlineEntry mOnline[MaxOnlineEntries]{};
+    int mOnlineCount{};
+    int mOnlineSource{-1};
+    int mLocalCount{};
+    int mLocalSourceCount{};
     MusicTrack mTracks[MaxTracks]{};
     MusicSource mSources[MaxSources]{};
     int mCount{};

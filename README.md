@@ -18,6 +18,28 @@ against the current `libpreloader.so`.
 - Panel position, page, sort and playlist are remembered
 - Never autoplays on game start
 
+## Online playback
+Online search and playback are on by default (`"online_enabled": true`).
+
+- **Search:** tap the search box, type, press **Enter**. Enter searches online when
+  nothing local matches, when you are on the **Online** tab, or when the text is
+  an `http(s)` URL. Results appear in a new **Online** tab; tap one to play.
+- **Direct streams:** paste/type an `http(s)` audio URL and press Enter. It is
+  streamed straight through Android's MediaPlayer (works for internet radio).
+- **How YouTube results play:** search uses the InnerTube `/search` endpoint
+  (WEB client); playback asks `/player` as the VISIONOS client for a pre-signed
+  audio URL, downloads it in 512 KB `Range` chunks into `cache/` next to the mod,
+  and plays the file with the normal player. Seek, duration, loop, shuffle all
+  work as for local files. The cache holds the last 6 songs and is emptied on
+  start/exit.
+- **Status** (Resolving / Loading 42% / errors) is shown in the search bar.
+- **If it stops working:** YouTube changes clients without notice. The values to
+  bump live at the top of `src/Online.cpp` (client versions, user agents).
+  `levimusic.log` shows the HTTP status and playability reason for each failure.
+- This uses YouTube's private API, which its Terms of Service do not permit
+  outside official apps. Treat it as a personal-use experiment, and set
+  `online_enabled` to `false` to remove it entirely.
+
 ## Config
 `config/config.json` inside the mod folder (schema: `config.schema.json`):
 

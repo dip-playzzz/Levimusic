@@ -15,6 +15,7 @@
   "ui_mode": 0,
   "loop_mode": 0,
   "shuffle_enabled": false,
+  "online_enabled": true,
   "ui_panel_x": 0,
   "ui_panel_y": 0,
   "ui_panel_position_saved": false,

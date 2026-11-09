@@ -1,4 +1,5 @@
 #include "NativeMusicUi.hpp"
+#include "Online.hpp"
 #include "Config.hpp"
 #include "JniBridge.hpp"
 
@@ -363,6 +364,7 @@ void* NativeMusicUi::animationThreadThunk(void* pointer) {
         {
             ScopedUiBusy guard(&self->mUiBusy, false);
             if (guard.locked()) {
+                self->pollOnline();
                 self->tickPlaybackUnlocked();
                 if (__atomic_load_n(&self->mOpen, __ATOMIC_ACQUIRE) != 0) {
                     if (self->mFilterDirty) self->rebuildVisibleIndex();
@@ -794,7 +796,7 @@ void NativeMusicUi::selectTrackInternal(int globalIndex, bool autoplay,
         // vendor implementations do not report a reliable looping/completion
         // state after rapid track replacement.
         mPlayer->setLooping(false);
-        const bool started = mPlayer->play(track->path);
+        const bool started = startPlayback(track->path);
         mPlaybackWasRunning = started;
         mCompletionHandled = !started;
         mCompletionIdleFrames = 0;
@@ -809,6 +811,47 @@ void NativeMusicUi::selectTrackInternal(int globalIndex, bool autoplay,
     const int visible = visibleIndexOfGlobal(globalIndex);
     if (visible >= 0) mPage = visible / RowsPerPage;
     if (renderAfter) renderUnlocked();
+}
+
+bool NativeMusicUi::startPlayback(const char* path) {
+    if (isOnlinePath(path)) {
+        if (!mConfig->config().onlineEnabled) return false;
+        if (online::isLoading(path)) return true;   // already on its way
+        // Network + download happen on the online worker; the player is stopped
+        // now so the previous song does not keep playing while this one loads.
+        mPlayer->stop();
+        online::requestPlay(path);
+        return true;
+    }
+    online::cancel();
+    return mPlayer->play(path);
+}
+
+bool NativeMusicUi::shouldSearchOnline() {
+    if (!mConfig->config().onlineEnabled || !mSearchText[0]) return false;
+    if (strncmp(mSearchText, "http://", 7) == 0 ||
+        strncmp(mSearchText, "https://", 8) == 0) return true;
+    if (mFilterDirty) rebuildVisibleIndex();
+    const int onlineSource = mLibrary->onlineSourceIndex();
+    if (onlineSource >= 0 && mActiveTab == onlineSource + 1) return true;
+    return mVisibleCount == 0;   // nothing local matches: look online
+}
+
+void NativeMusicUi::pollOnline() {
+    static OnlineEntry entries[MusicLibrary::MaxOnlineEntries];
+    int count = 0;
+    if (!online::takeResults(entries, MusicLibrary::MaxOnlineEntries, &count)) return;
+    mLibrary->setOnlineEntries(entries, count);
+    const int source = mLibrary->onlineSourceIndex();
+    if (source >= 0) {
+        mActiveTab = source + 1;
+        ensureSourceVisible();
+    } else if (mActiveTab > mLibrary->sourceCount()) {
+        mActiveTab = 0;
+    }
+    mPage = 0;
+    markFilterDirty();
+    rebuildVisibleIndex();
 }
 
 void NativeMusicUi::advanceTrack(int direction, bool fromCompletion) {
@@ -845,7 +888,7 @@ void NativeMusicUi::advanceTrack(int direction, bool fromCompletion) {
         if (currentGlobal >= 0) {
             selectTrackInternal(currentGlobal, true, false, sourceFilter);
         } else if (mSnapshot.path[0]) {
-            const bool started = mPlayer->play(mSnapshot.path);
+            const bool started = startPlayback(mSnapshot.path);
             mPlaybackWasRunning = started;
             mCompletionHandled = !started;
             mCompletionIdleFrames = 0;
@@ -930,6 +973,10 @@ bool NativeMusicUi::onKey(int keyCode, unsigned int, bool isKeyDown) {
     if (keyCode == 67) {
         eraseLastSearchGlyph();
     } else if (keyCode == 66) {
+        if (shouldSearchOnline()) {
+            online::search(mSearchText);
+            clearSearch();
+        }
         setSearchActive(false);
     } else if (keyCode == 4 || keyCode == 111) {
         setSearchActive(false);
@@ -986,6 +1033,7 @@ void NativeMusicUi::activateControl(int control) {
                                 currentSourceFilter());
         }
     } else if (control == ControlStop) {
+        online::cancel();
         mPlayer->stop();
         mPlaybackWasRunning = false;
         mCompletionHandled = false;
@@ -1818,8 +1866,14 @@ void NativeMusicUi::renderUnlocked() {
         drawCloseIcon(searchX + searchW - 22 * scale,
                       searchY + 22 * scale, 0.75f * scale, muted);
     } else {
-        addText(searchX + 48 * scale, searchY + 12 * scale,
-                bodyFont, "Search songs, artists", muted);
+        char onlineStatus[96];
+        online::statusText(onlineStatus, sizeof(onlineStatus));
+        addText(searchX + 48 * scale, searchY + 12 * scale, bodyFont,
+                onlineStatus[0] ? onlineStatus
+                                : (mConfig->config().onlineEnabled
+                                       ? "Search songs, artists, online"
+                                       : "Search songs, artists"),
+                onlineStatus[0] ? green : muted);
     }
     if (mSearchActive && ((mAnimationFrame / 8) & 1) == 0)
         addRect(searchX + 18 * scale,
@@ -1915,7 +1969,10 @@ void NativeMusicUi::renderUnlocked() {
                         softWhite);
         addTextCentered(listX, listY + 222 * scale,
                         rowW, 32 * scale, smallFont,
-                        mSearchText[0] ? "Try another search" : "Check music_directories",
+                        mSearchText[0] ? (mConfig->config().onlineEnabled
+                                              ? "Press Enter to search online"
+                                              : "Try another search")
+                                      : "Check music_directories",
                         muted);
     }
 

@@ -61,6 +61,10 @@
       "minimum": 0,
       "maximum": 2
     },
+    "online_enabled": {
+      "description": "Enables online search and playback (YouTube search results, direct http(s) stream URLs). Type a search and press Enter when there is no local match, or on the Online tab; paste an http(s) audio URL to stream it.",
+      "type": "boolean"
+    },
     "shuffle_enabled": {
       "type": "boolean"
     },

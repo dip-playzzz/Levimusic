@@ -161,7 +161,8 @@ bool MediaMetadata::decodeArtwork(jni::Env* env, jni::JByteArray picture,
 }
 
 void MediaMetadata::ensure(MusicTrack& track) {
-    if (track.metadataState != 0 || !mReady || !track.path[0]) return;
+    if (track.metadataState != 0 || !mReady || !track.path[0] ||
+        isOnlinePath(track.path)) return;
     track.metadataState = 1;
 
     jni::EnvScope scope(mVm);

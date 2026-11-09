@@ -261,7 +261,12 @@ void AndroidMediaPlayer::releasePlayerObject(jni::Env* env) {
 }
 
 bool AndroidMediaPlayer::play(const char* path) {
+    return playAs(path, path);
+}
+
+bool AndroidMediaPlayer::playAs(const char* path, const char* identity) {
     if (!path || !*path) return false;
+    if (!identity || !*identity) identity = path;
     lockState();
     if (!mReady || !mVm) { unlockState(); return false; }
     jni::EnvScope scope(mVm);
@@ -307,7 +312,7 @@ bool AndroidMediaPlayer::play(const char* path) {
         return false;
     }
     mPaused = false;
-    copyString(mCurrentPath, sizeof(mCurrentPath), path);
+    copyString(mCurrentPath, sizeof(mCurrentPath), identity);
     if (mRealVisualizerAllowed) ensureVisualizer(env);
     unlockState();
     return true;

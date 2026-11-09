@@ -36,6 +36,7 @@ void ConfigManager::defaults() {
     mConfig.uiMode = 0;
     mConfig.loopMode = 0;
     mConfig.shuffleEnabled = false;
+    mConfig.onlineEnabled = true;
     mConfig.uiPanelX = 0;
     mConfig.uiPanelY = 0;
     mConfig.uiPanelPositionSaved = false;
@@ -177,6 +178,7 @@ void ConfigManager::load() {
     mConfig.loopMode = parseInteger(json, "loop_mode", mConfig.loopMode);
     if (mConfig.loopMode < 0 || mConfig.loopMode > 2) mConfig.loopMode = 0;
     mConfig.shuffleEnabled = parseBoolean(json, "shuffle_enabled", false);
+    mConfig.onlineEnabled = parseBoolean(json, "online_enabled", true);
 
     mConfig.uiPanelX = parseInteger(json, "ui_panel_x", mConfig.uiPanelX);
     mConfig.uiPanelY = parseInteger(json, "ui_panel_y", mConfig.uiPanelY);
@@ -222,6 +224,7 @@ void ConfigManager::writeConfig() {
                    "  \"ui_mode\": %d,\n"
                    "  \"loop_mode\": %d,\n"
                    "  \"shuffle_enabled\": %s,\n"
+                   "  \"online_enabled\": %s,\n"
                    "  \"ui_panel_x\": %d,\n"
                    "  \"ui_panel_y\": %d,\n"
                    "  \"ui_panel_position_saved\": %s,\n"
@@ -235,6 +238,7 @@ void ConfigManager::writeConfig() {
                    mConfig.autoResolutionScale ? "true" : "false",
                    mConfig.uiMode, mConfig.loopMode,
                    mConfig.shuffleEnabled ? "true" : "false",
+                   mConfig.onlineEnabled ? "true" : "false",
                    mConfig.uiPanelX, mConfig.uiPanelY,
                    mConfig.uiPanelPositionSaved ? "true" : "false",
                    mConfig.uiSortMode, mConfig.uiPage, mConfig.uiSourceOffset,

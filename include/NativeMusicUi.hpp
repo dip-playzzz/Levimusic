@@ -86,6 +86,9 @@ private:
     void selectTrackInternal(int globalIndex, bool autoplay, bool renderAfter,
                              int playbackSourceFilter = -999);
     void advanceTrack(int direction, bool fromCompletion);
+    bool startPlayback(const char* path);
+    void pollOnline();
+    bool shouldSearchOnline();
     int randomVisibleIndex(int count, int current);
     void ensureSourceVisible();
     void setSearchActive(bool active);

@@ -238,6 +238,52 @@ void MusicLibrary::scan(const LeviMusicConfig& config) {
         if (mCount >= config.maxTracks || mCount >= MaxTracks) break;
     }
     removeEmptySources();
+    mLocalCount = mCount;
+    mLocalSourceCount = mSourceCount;
+    mOnlineSource = -1;
+    applyOnline();
+}
+
+void MusicLibrary::setOnlineEntries(const OnlineEntry* entries, int count) {
+    if (count < 0) count = 0;
+    if (count > MaxOnlineEntries) count = MaxOnlineEntries;
+    mOnlineCount = count;
+    for (int i = 0; i < count; ++i) mOnline[i] = entries[i];
+    // Local tracks and playlists always come first, so the online playlist can
+    // be dropped and re-appended without disturbing their indices.
+    for (int i = mLocalCount; i < mCount; ++i) mTracks[i] = MusicTrack{};
+    for (int i = mLocalSourceCount; i < mSourceCount; ++i) mSources[i] = MusicSource{};
+    mCount = mLocalCount;
+    mSourceCount = mLocalSourceCount;
+    mOnlineSource = -1;
+    applyOnline();
+}
+
+void MusicLibrary::applyOnline() {
+    if (mOnlineCount <= 0 || mSourceCount >= MaxSources) return;
+    const int room = MaxTracks - mCount;
+    if (room <= 0) return;
+    MusicSource& source = mSources[mSourceCount];
+    copyString(source.path, sizeof(source.path), OnlineSourcePath);
+    copyString(source.label, sizeof(source.label), "Online");
+    source.configured = false;
+    source.trackCount = 0;
+    mOnlineSource = mSourceCount++;
+    const int n = mOnlineCount < room ? mOnlineCount : room;
+    for (int i = 0; i < n; ++i) {
+        MusicTrack& track = mTracks[mCount];
+        memset(&track, 0, sizeof(track));
+        copyString(track.path, sizeof(track.path), mOnline[i].path);
+        copyString(track.name, sizeof(track.name), mOnline[i].title);
+        copyString(track.title, sizeof(track.title), mOnline[i].title);
+        copyString(track.artist, sizeof(track.artist), mOnline[i].artist);
+        copyString(track.format, sizeof(track.format),
+                   strncmp(mOnline[i].path, "yt:", 3) == 0 ? "YT" : "STREAM");
+        track.sourceIndex = mOnlineSource;
+        track.metadataState = 1;   // no embedded artwork to look up
+        ++mCount;
+        ++mSources[mOnlineSource].trackCount;
+    }
 }
 
 int MusicLibrary::filteredCount(int sourceIndex) const {
