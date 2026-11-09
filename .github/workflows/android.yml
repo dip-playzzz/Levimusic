@@ -3,7 +3,7 @@ name: LeviMusic Android Build
 on:
   workflow_dispatch:
   push:
-    branches: [main]
+    branches: [main, 'integration/**']
 
 permissions:
   contents: read
