@@ -138,6 +138,9 @@ bool NativeMusicUi::initialize(leviabi::Api* api, ConfigManager* config,
     leviabi::setShortString(mModule.displayName,
                             "LeviMusic");
     leviabi::setShortString(mModule.description, "Local music library");
+    if (leviabi::ownerModId()[0]) leviabi::fillOwnerModId(mModule.modId);
+    levi_log(LOG_INFO_VALUE, LogTag, "registering module id=%s modId=%s",
+             ModuleId, leviabi::ownerModId());
     mModule.defaultEnabled = false;
     initializeSettingsEntries();
     if (mSettingCount <= 0 || mSettingCount > 16) return false;
@@ -145,11 +148,13 @@ bool NativeMusicUi::initialize(leviabi::Api* api, ConfigManager* config,
     mModule.configs.end = mSettings + mSettingCount;
     mModule.configs.capacityEnd = mSettings + mSettingCount;
     if (!leviabi::callbacksAreEmpty(mModule)) {
-        __android_log_print(LOG_ERROR_VALUE, LogTag,
+        levi_log(LOG_ERROR_VALUE, LogTag,
                             "Mod Menu callback ABI validation failed");
         return false;
     }
     mRegistered = mApi->registerModule(&mModule);
+    levi_log(LOG_INFO_VALUE, LogTag, "registerModule returned %d",
+             mRegistered ? 1 : 0);
     if (!mRegistered) return false;
 
     refreshViewport();
@@ -310,7 +315,7 @@ void* NativeMusicUi::animationThreadThunk(void* pointer) {
                                                    strlen(ModuleId),
                                                    self->mCommands, 0);
                 }
-                __android_log_print(LOG_INFO_VALUE, LogTag,
+                levi_log(LOG_INFO_VALUE, LogTag,
                                     "MinecraftActivity closed; playback stopped immediately");
             }
         }
@@ -330,7 +335,7 @@ void* NativeMusicUi::animationThreadThunk(void* pointer) {
                 if (__atomic_load_n(&self->mOpen,
                                     __ATOMIC_ACQUIRE) != 0)
                     self->renderUnlocked();
-                __android_log_print(LOG_INFO_VALUE, LogTag,
+                levi_log(LOG_INFO_VALUE, LogTag,
                                     "config.json changed on disk; music directories hot reloaded");
             }
         }
@@ -387,13 +392,21 @@ void NativeMusicUi::stopAnimationThread() {
 }
 
 void NativeMusicUi::handleModuleToggle(bool enabled) {
+    levi_log(LOG_INFO_VALUE, LogTag, "module toggle -> %d: begin",
+             enabled ? 1 : 0);
     setOpenInternal(enabled);
+    levi_log(LOG_INFO_VALUE, LogTag, "module toggle -> %d: done",
+             enabled ? 1 : 0);
 }
 
 void NativeMusicUi::forceDisabledDefault() {
+    levi_log(LOG_INFO_VALUE, LogTag, "forceDisabledDefault: begin");
     setOpenInternal(false);
-    if (mApi && mRegistered && mApi->setModuleEnabled)
+    if (mApi && mRegistered && mApi->setModuleEnabled) {
+        levi_log(LOG_INFO_VALUE, LogTag, "forceDisabledDefault: setModuleEnabled(false)");
         mApi->setModuleEnabled(ModuleId, strlen(ModuleId), false);
+    }
+    levi_log(LOG_INFO_VALUE, LogTag, "forceDisabledDefault: done");
 }
 
 void NativeMusicUi::refreshViewport() {

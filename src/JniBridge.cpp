@@ -57,7 +57,7 @@ bool captureFromModContext(void* modContext) {
     Vm* candidate = nullptr;
     memcpy(&candidate, modContext, sizeof(candidate));
     if (!candidate || !candidate->functions || !candidate->functions[GetEnvIndex]) {
-        __android_log_print(LOG_ERROR_VALUE, LogTag,
+        levi_log(LOG_ERROR_VALUE, LogTag,
                             "invalid JavaVM in Levi ModContext");
         return false;
     }
@@ -270,7 +270,7 @@ bool checkAndClearException(Env* env, const char* operation) {
     if (!check || !check(env)) return false;
     auto clear = envFunction<ClearFn>(env, ExceptionClearIndex);
     if (clear) clear(env);
-    __android_log_print(LOG_ERROR_VALUE, LogTag,
+    levi_log(LOG_ERROR_VALUE, LogTag,
                         "JNI failure during %s; exception cleared",
                         operation ? operation : "unknown operation");
     return true;

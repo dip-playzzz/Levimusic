@@ -190,4 +190,14 @@ struct Api {
 
 bool resolveApi(Api& api);
 
+// Id the launcher assigned to this mod (ModContext::mInfo.id). Newer
+// preloaders reject Mod Menu modules whose declared modId does not match the
+// owning lifecycle mod, so ModuleInfo.modId must be filled with it.
+void setOwnerModId(const char* id);
+const char* ownerModId();
+// Writes the owner id into a ModuleInfo string field. Handles ids longer than
+// the 22-byte short-string limit by emitting a libc++ "long" string that points
+// at static storage (the preloader copies it during registerModule).
+void fillOwnerModId(NdkString& out);
+
 } // namespace leviabi

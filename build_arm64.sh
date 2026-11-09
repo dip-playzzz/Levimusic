@@ -24,7 +24,7 @@ mkdir -p "$OBJ"
 rm -f "$OBJ"/*.o
 
 COMMON="--target=$TARGET -std=c++20 -fPIC -fvisibility=hidden -ffreestanding -fno-exceptions -fno-rtti -fno-stack-protector -fno-builtin -mno-outline-atomics -nostdinc -I$ROOT/include"
-SOURCES="main LeviMusicMod Compatibility LeviAbi JniBridge Config MusicLibrary AndroidMediaPlayer MediaMetadata NativeMusicUi ModMenuToggleHook ModMenuConfigHook VanillaUiAssets Cache"
+SOURCES="main FileLog LeviMusicMod Compatibility LeviAbi JniBridge Config MusicLibrary AndroidMediaPlayer MediaMetadata NativeMusicUi ModMenuToggleHook ModMenuConfigHook VanillaUiAssets Cache"
 
 for name in $SOURCES; do
     # shellcheck disable=SC2086

@@ -3,7 +3,7 @@ name: LeviMusic Android Build
 on:
   workflow_dispatch:
   push:
-    branches: [main, 'integration/**']
+    branches: [main]
 
 permissions:
   contents: read
@@ -41,4 +41,11 @@ jobs:
         with:
           name: LeviMusic-ARM64
           path: build/liblevi_music.so
+          if-no-files-found: error
+
+      - name: Upload unstripped library (for crash symbolication)
+        uses: actions/upload-artifact@v4
+        with:
+          name: LeviMusic-ARM64-unstripped
+          path: build/liblevi_music.so.unstripped
           if-no-files-found: error

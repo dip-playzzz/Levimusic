@@ -2,6 +2,32 @@
 
 namespace leviabi {
 
+static char gOwnerModId[48];
+
+void setOwnerModId(const char* id) { copyString(gOwnerModId, sizeof(gOwnerModId), id ? id : ""); }
+const char* ownerModId() { return gOwnerModId; }
+
+static char gOwnerModIdLong[64];
+
+void fillOwnerModId(NdkString& out) {
+    const char* id = gOwnerModId;
+    const usize length = strlen(id);
+    if (length <= 22) {
+        setShortString(out, id);
+        return;
+    }
+    // libc++ long form (little endian): word0 = (capacity << 1) | 1,
+    // word1 = size, word2 = data pointer.
+    copyString(gOwnerModIdLong, sizeof(gOwnerModIdLong), id);
+    const u64 capacityWord = (static_cast<u64>(sizeof(gOwnerModIdLong) - 1) << 1) | 1u;
+    const u64 sizeWord = static_cast<u64>(strlen(gOwnerModIdLong));
+    const void* data = gOwnerModIdLong;
+    memset(&out, 0, sizeof(out));
+    memcpy(out.bytes, &capacityWord, sizeof(capacityWord));
+    memcpy(out.bytes + 8, &sizeWord, sizeof(sizeWord));
+    memcpy(out.bytes + 16, &data, sizeof(data));
+}
+
 bool resolveApi(Api& api) {
     memset(&api, 0, sizeof(api));
     api.preloader = dlopen("libpreloader.so", RTLD_NOW_VALUE | RTLD_NOLOAD_VALUE);

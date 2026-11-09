@@ -40,6 +40,12 @@ export ANDROID_NDK_ROOT=/path/to/ndk/28.2.13676358
 GitHub Actions (`.github/workflows/android.yml`) does the same and uploads
 the `.levipack` and the raw `.so`.
 
+## Troubleshooting
+The mod writes a log next to its library, in the same folder as `config/`:
+`<mod folder>/levimusic.log` (also sent to logcat under the tag `LeviMusic`).
+Every load/enable step is logged, so the last line shows where something
+failed or hung. Send that file when reporting a problem.
+
 ## Preloader compatibility
 The mod mirrors a few preloader structs in `include/LeviAbi.hpp` and talks to
 `libpreloader.so` through `dlsym`, so it has no SDK or libminecraftpe link-time

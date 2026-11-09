@@ -20,7 +20,7 @@ bool AndroidMediaPlayer::initialize(jni::Vm* vm) {
     if (mReady) { unlockState(); return true; }
     if (!vm) {
         unlockState();
-        __android_log_print(LOG_ERROR_VALUE, LogTag,
+        levi_log(LOG_ERROR_VALUE, LogTag,
                             "Android MediaPlayer unavailable: JavaVM not captured");
         return false;
     }
@@ -31,10 +31,10 @@ bool AndroidMediaPlayer::initialize(jni::Vm* vm) {
     mReady = true;
     unlockState();
     if (mRealVisualizerAllowed) {
-        __android_log_print(LOG_INFO_VALUE, LogTag,
+        levi_log(LOG_INFO_VALUE, LogTag,
                             "Android MediaPlayer backend selected; real FFT permission granted");
     } else {
-        __android_log_print(LOG_INFO_VALUE, LogTag,
+        levi_log(LOG_INFO_VALUE, LogTag,
                             "RECORD_AUDIO not granted; fake FFT visualizer selected");
     }
     return true;
@@ -178,7 +178,7 @@ bool AndroidMediaPlayer::ensureVisualizer(jni::Env* env) {
         mRealVisualizerAllowed = false;
         mFakeVisualizerActive = true;
         if (!mVisualizerFallbackLogged) {
-            __android_log_print(LOG_INFO_VALUE, LogTag,
+            levi_log(LOG_INFO_VALUE, LogTag,
                                 "real FFT unavailable; switched to fake FFT visualizer");
             mVisualizerFallbackLogged = true;
         }
@@ -228,7 +228,7 @@ bool AndroidMediaPlayer::ensureVisualizer(jni::Env* env) {
         return false;
     }
     mVisualizerReady = true;
-    __android_log_print(LOG_INFO_VALUE, LogTag,
+    levi_log(LOG_INFO_VALUE, LogTag,
                         "real FFT visualizer attached to MediaPlayer audio session");
     return true;
 }

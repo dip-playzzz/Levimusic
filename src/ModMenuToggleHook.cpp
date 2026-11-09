@@ -12,7 +12,7 @@ bool ModMenuToggleHook::resolveTarget() {
     if (!mApi || !mApi->preloader) return false;
     mTarget = dlsym(mApi->preloader, ToggleJniSymbol);
     if (!mTarget) {
-        __android_log_print(LOG_ERROR_VALUE, LogTag,
+        levi_log(LOG_ERROR_VALUE, LogTag,
                             "stable Mod Menu toggle JNI export unavailable");
         return false;
     }
@@ -33,7 +33,7 @@ bool ModMenuToggleHook::initialize(leviabi::Api* api, NativeMusicUi* ui) {
         mTarget, reinterpret_cast<void*>(&ModMenuToggleHook::toggleDetour),
         &original, 100);
     if (result != 0 || !original) {
-        __android_log_print(LOG_ERROR_VALUE, LogTag,
+        levi_log(LOG_ERROR_VALUE, LogTag,
                             "Mod Menu toggle JNI hook failed: %d", result);
         gModMenuToggleHook = nullptr;
         mTarget = nullptr;
@@ -42,7 +42,7 @@ bool ModMenuToggleHook::initialize(leviabi::Api* api, NativeMusicUi* ui) {
 
     mOriginal = reinterpret_cast<ToggleJniFn>(original);
     mInstalled = true;
-    __android_log_print(LOG_INFO_VALUE, LogTag,
+    levi_log(LOG_INFO_VALUE, LogTag,
                         "Mod Menu toggle uses stable JNI bridge");
     return true;
 }

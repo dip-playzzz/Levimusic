@@ -22,7 +22,7 @@ bool VanillaUiAssets::registerRaw(const char* relativePath, const char* imageId,
     const int fd = open(path, O_RDONLY_VALUE);
     if (fd < 0) {
         free(pixels);
-        __android_log_print(LOG_ERROR_VALUE, LogTag,
+        levi_log(LOG_ERROR_VALUE, LogTag,
                             "vanilla UI texture missing: %s", path);
         return false;
     }
@@ -43,7 +43,7 @@ bool VanillaUiAssets::registerRaw(const char* relativePath, const char* imageId,
     free(pixels);
 
     if (!registered) {
-        __android_log_print(LOG_ERROR_VALUE, LogTag,
+        levi_log(LOG_ERROR_VALUE, LogTag,
                             "failed to register vanilla UI texture: %s", imageId);
     }
     return registered;
@@ -67,7 +67,7 @@ bool VanillaUiAssets::initialize(leviabi::Api* api,
 
     mReady = ok;
     if (mReady) {
-        __android_log_print(LOG_INFO_VALUE, LogTag,
+        levi_log(LOG_INFO_VALUE, LogTag,
                             "registered Mojang vanilla UI textures");
     }
     return mReady;

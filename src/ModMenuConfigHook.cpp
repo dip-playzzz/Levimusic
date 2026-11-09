@@ -11,7 +11,7 @@ bool ModMenuConfigHook::resolveTarget() {
     if (!mApi || !mApi->preloader) return false;
     mTarget = dlsym(mApi->preloader, ConfigJniSymbol);
     if (!mTarget) {
-        __android_log_print(LOG_ERROR_VALUE, LogTag,
+        levi_log(LOG_ERROR_VALUE, LogTag,
                             "stable Mod Menu config JNI export unavailable");
         return false;
     }
@@ -33,7 +33,7 @@ bool ModMenuConfigHook::initialize(leviabi::Api* api,
         mTarget, reinterpret_cast<void*>(&ModMenuConfigHook::configDetour),
         &original, 110);
     if (result != 0 || !original) {
-        __android_log_print(LOG_ERROR_VALUE, LogTag,
+        levi_log(LOG_ERROR_VALUE, LogTag,
                             "Mod Menu config JNI hook failed: %d", result);
         gModMenuConfigHook = nullptr;
         mTarget = nullptr;
@@ -42,7 +42,7 @@ bool ModMenuConfigHook::initialize(leviabi::Api* api,
 
     mOriginal = reinterpret_cast<SetConfigJniFn>(original);
     mInstalled = true;
-    __android_log_print(LOG_INFO_VALUE, LogTag,
+    levi_log(LOG_INFO_VALUE, LogTag,
                         "Mod Menu config uses stable JNI bridge");
     return true;
 }

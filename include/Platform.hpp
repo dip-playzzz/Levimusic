@@ -75,6 +75,7 @@ struct DlPhdrInfo {
 int dl_iterate_phdr(int (*)(DlPhdrInfo*, usize, void*), void*);
 
 int __android_log_print(int, const char*, const char*, ...);
+int vsnprintf(char*, usize, const char*, __builtin_va_list);
 }
 
 constexpr int RTLD_NOW_VALUE = 2;
@@ -82,6 +83,7 @@ constexpr int RTLD_NOLOAD_VALUE = 4;
 constexpr int O_RDONLY_VALUE = 0;
 constexpr int O_WRONLY_VALUE = 1;
 constexpr int O_CREAT_VALUE = 64;
+constexpr int O_APPEND_VALUE = 1024;
 constexpr int O_TRUNC_VALUE = 512;
 constexpr int PROT_READ_VALUE = 1;
 constexpr int PROT_WRITE_VALUE = 2;
@@ -125,3 +127,9 @@ inline void appendString(char* dst, usize capacity, const char* src) {
     while (at + 1 < capacity && src[i]) dst[at++] = src[i++];
     dst[at] = '\0';
 }
+
+// Logs to logcat AND to <mod root>/levimusic.log so problems can be diagnosed
+// on devices where logcat is not available. Defined in src/FileLog.cpp.
+void levi_log_set_path(const char* path);
+void levi_log(int priority, const char* tag, const char* format, ...)
+    __attribute__((format(printf, 3, 4)));
