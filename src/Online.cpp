@@ -34,7 +34,9 @@ struct State {
     volatile int playGeneration{};
     AndroidMediaPlayer* player{};
     PThread thread{};
+    bool configured{};   // start() called; worker is spawned lazily
     bool running{};
+    char fallbackDir[600]{};
 
     char cacheDir[600]{};
 
@@ -74,6 +76,12 @@ void setStatusFormat(const char* format, long long a) {
     char text[96];
     snprintf(text, sizeof(text), format, a);
     setStatus(text);
+}
+
+long nowMs() {
+    TimeSpec t{};
+    clock_gettime(1, &t);   // CLOCK_MONOTONIC
+    return t.tv_sec * 1000L + t.tv_nsec / 1000000L;
 }
 
 bool startsWith(const char* text, const char* prefix) {
@@ -183,8 +191,11 @@ int webSearch(const char* query, char* buffer, int capacity) {
         {"Origin", "https://www.youtube.com"},
         {"Accept-Language", "en-US,en;q=0.9"},
     };
+    const long started = nowMs();
     const http::Result result = http::request(jni::javaVm(), "POST", SearchUrl,
-                                              headers, 4, body, -1, buffer, capacity, nullptr);
+                                              headers, 4, body, -1, buffer, capacity, &g.quit);
+    levi_log(LOG_INFO_VALUE, LogTag, "search http status=%d bytes=%lld in %ld ms",
+             result.status, result.received, nowMs() - started);
     if (result.status == 200) captureVisitor(buffer, buffer + strlen(buffer));
     return result.status;
 }
@@ -366,8 +377,11 @@ bool resolveStream(const char* id, Stream& stream, char* error, usize errorCap) 
             {"X-Goog-Visitor-Id", g.visitor},
             {"Origin", "https://www.youtube.com"},
         };
+        const long started = nowMs();
         const http::Result result = http::request(jni::javaVm(), "POST", PlayerUrl,
-                                                  headers, 4, body, -1, buffer, PlayerBufferBytes, nullptr);
+                                                  headers, 4, body, -1, buffer, PlayerBufferBytes, &g.quit);
+        levi_log(LOG_INFO_VALUE, LogTag, "player http status=%d bytes=%lld in %ld ms",
+                 result.status, result.received, nowMs() - started);
         if (result.status != 200) {
             snprintf(error, errorCap, result.status < 0 ? "No network" : "Player HTTP %d", result.status);
             g.visitor[0] = 0;   // refresh the session and retry once
@@ -430,7 +444,7 @@ bool downloadAudio(const Stream& stream, const char* id, int generation,
             {"Range", range},
         };
         const http::Result result = http::request(jni::javaVm(), "GET", stream.url,
-                                                  headers, 2, nullptr, fd, nullptr, 0, nullptr);
+                                                  headers, 2, nullptr, fd, nullptr, 0, &g.quit);
         if (result.status == 416 && written > 0) { ok = true; break; }
         if (result.status != 206 && result.status != 200) {
             snprintf(error, errorCap, result.status < 0 ? "Download failed (no network)"
@@ -529,24 +543,69 @@ void* workerMain(void*) {
 
 } // namespace
 
-bool start(AndroidMediaPlayer* player, const char* cacheDirectory) {
-    if (g.running) return true;
-    if (!player || !cacheDirectory || !*cacheDirectory) return false;
-    g.player = player;
-    copyString(g.cacheDir, sizeof(g.cacheDir), cacheDirectory);
+namespace {
+
+// Prefer the host app's private cache directory: it is fast, invisible to the
+// user, and keeps cache writes out of the mod folder that LeviLaunchroid
+// watches. Falls back to a folder next to the mod.
+void chooseCacheDirectory() {
+    char processName[160]{};
+    const int fd = open("/proc/self/cmdline", O_RDONLY_VALUE);
+    if (fd >= 0) {
+        const long n = read(fd, processName, sizeof(processName) - 1);
+        close(fd);
+        if (n <= 0) processName[0] = 0;
+    }
+    if (char* colon = strchr(processName, ':')) *colon = 0;   // drop ":service" suffix
+    if (processName[0] && strchr(processName, '.') && !strchr(processName, '/')) {
+        char appCache[400];
+        snprintf(appCache, sizeof(appCache), "/data/data/%s/cache", processName);
+        DIR* probe = opendir(appCache);
+        if (probe) {
+            closedir(probe);
+            snprintf(g.cacheDir, sizeof(g.cacheDir), "%s/levimusic", appCache);
+            mkdir(g.cacheDir, 0755);
+            DIR* made = opendir(g.cacheDir);
+            if (made) { closedir(made); return; }
+        }
+    }
+    copyString(g.cacheDir, sizeof(g.cacheDir), g.fallbackDir);
     mkdir(g.cacheDir, 0755);
+}
+
+// Spawns the worker the first time online features are used, so merely
+// enabling the mod does no online work at all.
+bool ensureWorker() {
+    if (g.running) return true;
+    if (!g.configured) return false;
+    chooseCacheDirectory();
     purgeCache();
     g.quit = 0;
     g.hasSearch = g.hasPlay = false;
     g.recentCount = 0;
-    if (pthread_create(&g.thread, nullptr, &workerMain, nullptr) != 0) return false;
+    if (pthread_create(&g.thread, nullptr, &workerMain, nullptr) != 0) {
+        levi_log(LOG_ERROR_VALUE, LogTag, "online worker could not be created");
+        return false;
+    }
     g.running = true;
-    levi_log(LOG_INFO_VALUE, LogTag, "online service started (cache %s)", g.cacheDir);
+    levi_log(LOG_INFO_VALUE, LogTag, "online worker started (cache %s)", g.cacheDir);
+    return true;
+}
+
+} // namespace
+
+bool start(AndroidMediaPlayer* player, const char* cacheDirectory) {
+    if (!player || !cacheDirectory || !*cacheDirectory) return false;
+    g.player = player;
+    copyString(g.fallbackDir, sizeof(g.fallbackDir), cacheDirectory);
+    g.configured = true;
+    levi_log(LOG_INFO_VALUE, LogTag, "online service ready (worker starts on first use)");
     return true;
 }
 
 void shutdown() {
-    if (!g.running) return;
+    g.configured = false;
+    if (!g.running) { g.player = nullptr; return; }
     __atomic_add_fetch(&g.playGeneration, 1, __ATOMIC_ACQ_REL);   // abort any download
     __atomic_store_n(&g.quit, 1, __ATOMIC_RELEASE);
     pthread_join(g.thread, nullptr);
@@ -556,7 +615,7 @@ void shutdown() {
 }
 
 void search(const char* query) {
-    if (!g.running || !query) return;
+    if (!query || !ensureWorker()) return;
     char trimmed[256];
     copyString(trimmed, sizeof(trimmed), query);
     usize length = strlen(trimmed);
@@ -572,7 +631,7 @@ void search(const char* query) {
 }
 
 void requestPlay(const char* path) {
-    if (!g.running || !path || !*path) return;
+    if (!path || !*path || !ensureWorker()) return;
     lockState();
     copyString(g.playPath, sizeof(g.playPath), path);
     copyString(g.activePath, sizeof(g.activePath), path);

@@ -28,10 +28,10 @@ Online search and playback are on by default (`"online_enabled": true`).
   streamed straight through Android's MediaPlayer (works for internet radio).
 - **How YouTube results play:** search uses the InnerTube `/search` endpoint
   (WEB client); playback asks `/player` as the VISIONOS client for a pre-signed
-  audio URL, downloads it in 512 KB `Range` chunks into `cache/` next to the mod,
+  audio URL, downloads it in 512 KB `Range` chunks into the app's private cache (falling back to `cache/` next to the mod),
   and plays the file with the normal player. Seek, duration, loop, shuffle all
   work as for local files. The cache holds the last 6 songs and is emptied on
-  start/exit.
+  first use/exit. The network worker only starts on your first search or online play.
 - **Status** (Resolving / Loading 42% / errors) is shown in the search bar.
 - **If it stops working:** YouTube changes clients without notice. The values to
   bump live at the top of `src/Online.cpp` (client versions, user agents).
@@ -65,7 +65,10 @@ the `.levipack` and the raw `.so`.
 ## Troubleshooting
 The mod writes a log next to its library, in the same folder as `config/`:
 `<mod folder>/levimusic.log` (also sent to logcat under the tag `LeviMusic`).
-Every load/enable step is logged, so the last line shows where something
+The first lines of a session show the build time (`build <date> <time>`), so
+you can confirm which build is installed. Setting `"online_enabled": false` in
+`config/config.json` disables all online code, which is a quick way to tell
+whether a problem comes from the online feature. Every load/enable step is logged, so the last line shows where something
 failed or hung. Send that file when reporting a problem.
 
 ## Preloader compatibility

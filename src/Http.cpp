@@ -79,9 +79,9 @@ Result request(jni::Vm* vm, const char* method, const char* url,
     a[0].l = refs.add(jni::newStringUtf(env, method));
     jni::callVoidMethodA(env, conn, setMethod, a);
     if (failed("setRequestMethod")) { jni::callVoidMethodA(env, conn, disconnect, nullptr); jni::checkAndClearException(env, "disconnect"); return result; }
-    a[0].i = 15000;
+    a[0].i = 10000;
     jni::callVoidMethodA(env, conn, setConnectTimeout, a);
-    a[0].i = 30000;
+    a[0].i = 20000;
     jni::callVoidMethodA(env, conn, setReadTimeout, a);
     for (int i = 0; i < headerCount; ++i) {
         if (!headers[i].name || !headers[i].value || !headers[i].value[0]) continue;

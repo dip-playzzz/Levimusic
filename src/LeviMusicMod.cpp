@@ -209,6 +209,8 @@ bool LeviMusicMod::enable(void* context) {
             levi_log(LOG_ERROR_VALUE, LogTag, "online service failed to start");
     }
 
+    levi_log(LOG_INFO_VALUE, LogTag, "build %s %s (online=%d)", __DATE__, __TIME__,
+             mConfig.config().onlineEnabled ? 1 : 0);
     mEnabled = true;
     mUi.forceDisabledDefault();
     levi_log(LOG_INFO_VALUE, LogTag,

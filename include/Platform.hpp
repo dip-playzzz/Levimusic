@@ -53,6 +53,7 @@ int pthread_create(PThread*, const void*, void* (*)(void*), void*);
 int pthread_join(PThread, void**);
 struct TimeSpec { long tv_sec; long tv_nsec; };
 int nanosleep(const TimeSpec*, TimeSpec*);
+int clock_gettime(int, TimeSpec*);
 
 int mprotect(void*, usize, int);
 long sysconf(int);
