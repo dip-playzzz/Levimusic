@@ -24,7 +24,7 @@ mkdir -p "$OBJ"
 rm -f "$OBJ"/*.o
 
 COMMON="--target=$TARGET -std=c++20 -fPIC -fvisibility=hidden -ffreestanding -fno-exceptions -fno-rtti -fno-stack-protector -fno-builtin -mno-outline-atomics -nostdinc -I$ROOT/include"
-SOURCES="main FileLog Http Online LeviMusicMod Compatibility LeviAbi JniBridge Config MusicLibrary AndroidMediaPlayer MediaMetadata NativeMusicUi ModMenuToggleHook ModMenuConfigHook VanillaUiAssets Cache"
+SOURCES="main FileLog LeviMusicMod Compatibility LeviAbi JniBridge Config MusicLibrary AndroidMediaPlayer MediaMetadata NativeMusicUi ModMenuToggleHook ModMenuConfigHook VanillaUiAssets Cache"
 
 for name in $SOURCES; do
     # shellcheck disable=SC2086
@@ -47,8 +47,8 @@ echo "$NEEDED" | grep -q 'Shared library: \[liblog.so\]' || fail "liblog.so not 
 echo "$NEEDED" | grep -q 'libpreloader.so'    && fail "must not link libpreloader.so (resolved with dlopen)"
 echo "$NEEDED" | grep -q 'libminecraftpe.so'  && fail "must not link libminecraftpe.so"
 S="$BUILD/strings.txt"; strings "$BUILD/$LIB" > "$S"
-for need in youtubei/v1/search youtubei/v1/player java/net/HttpURLConnection nativeSetExternalModConfig nativeToggleExternalMod 'android/media/audiofx/Visualizer' \
-            getEmbeddedPicture ui_panel_position_saved 'Search songs, artists' 'runtime preloader ABI validation passed'; do
+for need in nativeSetExternalModConfig nativeToggleExternalMod 'android/media/audiofx/Visualizer' \
+            getEmbeddedPicture ui_panel_position_saved 'Search songs, artists' 'Import songs' 'Scanning music folders' 'runtime preloader ABI validation passed'; do
     grep -Fq "$need" "$S" || fail "missing expected string: $need"
 done
 for bad in FMOD_System_Init bringToFront requestLayout ConfigSignature ToggleSignature; do

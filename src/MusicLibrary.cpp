@@ -48,13 +48,17 @@ static const char* const AudioExtensions[] = {
     ".rtx", ".ota", ".imy", ".mka"
 };
 
-bool MusicLibrary::accepted(const char* path) const {
+bool MusicLibrary::isAudioPath(const char* path) {
     if (!path || !*path) return false;
     for (usize i = 0;
          i < sizeof(AudioExtensions) / sizeof(AudioExtensions[0]); ++i) {
         if (endsWithIgnoreCase(path, AudioExtensions[i])) return true;
     }
     return false;
+}
+
+bool MusicLibrary::accepted(const char* path) const {
+    return isAudioPath(path);
 }
 
 int MusicLibrary::addSource(const char* rawPath, bool configured) {
@@ -133,7 +137,7 @@ void MusicLibrary::addTrack(const char* path, int sourceIndex) {
 void MusicLibrary::scanDirectory(const char* path,
                                  const LeviMusicConfig& config,
                                  int depth, bool configuredRoot) {
-    if (!path || !*path || depth > 8 ||
+    if (!path || !*path || depth > 8 || scanShouldStop() ||
         mCount >= config.maxTracks || mCount >= MaxTracks) return;
 
     // Create a playlist for this exact directory only when it contains audio
@@ -142,8 +146,8 @@ void MusicLibrary::scanDirectory(const char* path,
     DIR* directScan = opendir(path);
     if (!directScan) return;
     while (DirEnt* entry = readdir(directScan)) {
-        if (strcmp(entry->d_name, ".") == 0 ||
-            strcmp(entry->d_name, "..") == 0) continue;
+        if (scanShouldStop()) break;
+        if (entry->d_name[0] == '.') continue;   // ".", "..", hidden
         char child[768]{};
         copyString(child, sizeof(child), path);
         if (child[0] && child[strlen(child) - 1] != '/')
@@ -160,8 +164,8 @@ void MusicLibrary::scanDirectory(const char* path,
     if (!directory) return;
     while (DirEnt* entry = readdir(directory)) {
         if (mCount >= config.maxTracks || mCount >= MaxTracks) break;
-        if (strcmp(entry->d_name, ".") == 0 ||
-            strcmp(entry->d_name, "..") == 0) continue;
+        if (scanShouldStop()) break;
+        if (entry->d_name[0] == '.') continue;   // ".", "..", hidden
 
         char child[768]{};
         copyString(child, sizeof(child), path);
@@ -227,7 +231,19 @@ void MusicLibrary::removeEmptySources() {
     mSourceCount = writeIndex;
 }
 
+static long long monotonicMs() {
+    TimeSpec now{};
+    clock_gettime(1, &now);   // CLOCK_MONOTONIC
+    return static_cast<long long>(now.tv_sec) * 1000 + now.tv_nsec / 1000000;
+}
+
+bool MusicLibrary::scanShouldStop() const {
+    if (mAbortFlag && *mAbortFlag) return true;
+    return mDeadlineMs != 0 && monotonicMs() > mDeadlineMs;
+}
+
 void MusicLibrary::scan(const LeviMusicConfig& config) {
+    mDeadlineMs = monotonicMs() + 20000;   // never scan for more than 20 s
     mCount = 0;
     mSourceCount = 0;
     memset(mTracks, 0, sizeof(mTracks));
@@ -238,52 +254,6 @@ void MusicLibrary::scan(const LeviMusicConfig& config) {
         if (mCount >= config.maxTracks || mCount >= MaxTracks) break;
     }
     removeEmptySources();
-    mLocalCount = mCount;
-    mLocalSourceCount = mSourceCount;
-    mOnlineSource = -1;
-    applyOnline();
-}
-
-void MusicLibrary::setOnlineEntries(const OnlineEntry* entries, int count) {
-    if (count < 0) count = 0;
-    if (count > MaxOnlineEntries) count = MaxOnlineEntries;
-    mOnlineCount = count;
-    for (int i = 0; i < count; ++i) mOnline[i] = entries[i];
-    // Local tracks and playlists always come first, so the online playlist can
-    // be dropped and re-appended without disturbing their indices.
-    for (int i = mLocalCount; i < mCount; ++i) mTracks[i] = MusicTrack{};
-    for (int i = mLocalSourceCount; i < mSourceCount; ++i) mSources[i] = MusicSource{};
-    mCount = mLocalCount;
-    mSourceCount = mLocalSourceCount;
-    mOnlineSource = -1;
-    applyOnline();
-}
-
-void MusicLibrary::applyOnline() {
-    if (mOnlineCount <= 0 || mSourceCount >= MaxSources) return;
-    const int room = MaxTracks - mCount;
-    if (room <= 0) return;
-    MusicSource& source = mSources[mSourceCount];
-    copyString(source.path, sizeof(source.path), OnlineSourcePath);
-    copyString(source.label, sizeof(source.label), "Online");
-    source.configured = false;
-    source.trackCount = 0;
-    mOnlineSource = mSourceCount++;
-    const int n = mOnlineCount < room ? mOnlineCount : room;
-    for (int i = 0; i < n; ++i) {
-        MusicTrack& track = mTracks[mCount];
-        memset(&track, 0, sizeof(track));
-        copyString(track.path, sizeof(track.path), mOnline[i].path);
-        copyString(track.name, sizeof(track.name), mOnline[i].title);
-        copyString(track.title, sizeof(track.title), mOnline[i].title);
-        copyString(track.artist, sizeof(track.artist), mOnline[i].artist);
-        copyString(track.format, sizeof(track.format),
-                   strncmp(mOnline[i].path, "yt:", 3) == 0 ? "YT" : "STREAM");
-        track.sourceIndex = mOnlineSource;
-        track.metadataState = 1;   // no embedded artwork to look up
-        ++mCount;
-        ++mSources[mOnlineSource].trackCount;
-    }
 }
 
 int MusicLibrary::filteredCount(int sourceIndex) const {

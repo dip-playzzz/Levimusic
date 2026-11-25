@@ -31,7 +31,12 @@ private:
     bool onText(const char* text, usize size);
     void renderUnlocked();
     void refreshUnlocked();
-    void rescanLibraryPreservingState();
+    void rescanLibraryPreservingState();   // asks for a background rescan
+    void requestRescan();
+    void applyScannedLibrary();
+    void finishScan();
+    void scanWorker();
+    static void* scanThreadThunk(void* self);
     void tickPlaybackUnlocked();
     void startAnimationThread();
     void stopAnimationThread();
@@ -87,8 +92,6 @@ private:
                              int playbackSourceFilter = -999);
     void advanceTrack(int direction, bool fromCompletion);
     bool startPlayback(const char* path);
-    void pollOnline();
-    bool shouldSearchOnline();
     int randomVisibleIndex(int count, int current);
     void ensureSourceVisible();
     void setSearchActive(bool active);
@@ -110,6 +113,26 @@ private:
     void drawSearchIcon(float centerX, float centerY, float scale, u32 color);
     void drawCloseIcon(float centerX, float centerY, float scale, u32 color);
     void drawSortIcon(float centerX, float centerY, float scale, u32 color);
+    // In-game file picker that copies chosen songs into <mod folder>/music.
+    struct PickerEntry {
+        char name[128];
+        bool isDir;
+    };
+    static constexpr int MaxPickerEntries = 384;
+    static constexpr int MaxImportQueue = 32;
+    void openPicker();
+    void closePicker();
+    void loadPickerDirectory(const char* path);
+    void pickerGoUp();
+    void pickerToggleEntry(int entryIndex);
+    void pickerToggleAll();
+    bool pickerIsQueued(const char* fullPath) const;
+    void pickerFullPath(int entryIndex, char* out, usize capacity) const;
+    void startImport();
+    void finishImport();
+    void importWorker();
+    static void* importThreadThunk(void* self);
+
     void drawVolumeIcon(float centerX, float centerY, float scale,
                         bool muted, u32 color);
 
@@ -172,6 +195,33 @@ private:
     bool mSearchActive{};
     bool mFilterDirty{true};
     bool mSystemDarkMode{true};
+    PickerEntry mPickerEntries[MaxPickerEntries]{};
+    char mImportQueue[MaxImportQueue][512]{};
+    char mImportJob[MaxImportQueue][512]{};
+    char mPickerDir[512]{};
+    char mPickerStatus[96]{};
+    int mPickerCount{};
+    int mPickerPage{};
+    int mImportQueueCount{};
+    int mImportTotalFiles{};
+    int mImportPollFrames{};
+    PThread mImportThread{};
+    bool mPickerOpen{};
+    bool mImportThreadStarted{};
+    volatile int mImportRunning{};
+    volatile int mImportFinished{};
+    volatile int mImportAbort{};
+    volatile int mImportDoneFiles{};
+    volatile int mImportFailedFiles{};
+    MusicLibrary* mScanStaging{};
+    LeviMusicConfig mScanConfig{};
+    PThread mScanThread{};
+    bool mScanThreadStarted{};
+    bool mInitialScanApplied{};
+    volatile int mScanRunning{};
+    volatile int mScanFinished{};
+    volatile int mScanQueued{};
+    volatile int mScanAbort{};
     int mLifecyclePollFrames{};
     int mConfigPollFrames{};
     int mThemePollFrames{};

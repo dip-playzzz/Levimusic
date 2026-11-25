@@ -1,5 +1,4 @@
 #include "LeviMusicMod.hpp"
-#include "Online.hpp"
 #include "JniBridge.hpp"
 
 static LeviMusicMod gLeviMusicMod;
@@ -133,10 +132,8 @@ bool LeviMusicMod::load(void* context) {
         }
     }
     mConfig.load();
-    levi_log(LOG_INFO_VALUE, LogTag, "load: scanning library");
-    mLibrary.scan(mConfig.config());
-    levi_log(LOG_INFO_VALUE, LogTag, "load: library has %d tracks",
-             mLibrary.count());
+    // The library is scanned on a background thread once the UI is enabled, so
+    // slow storage can never stall game start-up.
     mLoaded = true;
     levi_log(LOG_INFO_VALUE, LogTag,
                         "loaded config: %s", mConfig.configPath());
@@ -202,15 +199,7 @@ bool LeviMusicMod::enable(void* context) {
         return false;
     }
 
-    if (mConfig.config().onlineEnabled) {
-        char cacheDir[640];
-        snprintf(cacheDir, sizeof(cacheDir), "%s/cache", mConfig.modRoot());
-        if (!online::start(&mPlayer, cacheDir))
-            levi_log(LOG_ERROR_VALUE, LogTag, "online service failed to start");
-    }
-
-    levi_log(LOG_INFO_VALUE, LogTag, "build %s %s (online=%d)", __DATE__, __TIME__,
-             mConfig.config().onlineEnabled ? 1 : 0);
+    levi_log(LOG_INFO_VALUE, LogTag, "build %s %s", __DATE__, __TIME__);
     mEnabled = true;
     mUi.forceDisabledDefault();
     levi_log(LOG_INFO_VALUE, LogTag,
@@ -220,7 +209,6 @@ bool LeviMusicMod::enable(void* context) {
 
 bool LeviMusicMod::disable(void*) {
     if (!mEnabled) return true;
-    online::shutdown();
     mConfigHook.shutdown();
     mToggleHook.shutdown();
     mUi.shutdown();

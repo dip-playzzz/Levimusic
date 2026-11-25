@@ -18,28 +18,19 @@ against the current `libpreloader.so`.
 - Panel position, page, sort and playlist are remembered
 - Never autoplays on game start
 
-## Online playback
-Online search and playback are on by default (`"online_enabled": true`).
+## Importing songs
+Press **IMPORT** (next to REFRESH) to open the in-game picker.
 
-- **Search:** tap the search box, type, press **Enter**. Enter searches online when
-  nothing local matches, when you are on the **Online** tab, or when the text is
-  an `http(s)` URL. Results appear in a new **Online** tab; tap one to play.
-- **Direct streams:** paste/type an `http(s)` audio URL and press Enter. It is
-  streamed straight through Android's MediaPlayer (works for internet radio).
-- **How YouTube results play:** search uses the InnerTube `/search` endpoint
-  (WEB client, with a few version fallbacks); playback asks `/player` as the
-  ANDROID_VR, then IOS, then VISIONOS client until one returns a pre-signed
-  audio URL (the status line shows e.g. `VR: LOGIN_REQUIRED` for the first failure), downloads it in 512 KB `Range` chunks into the app's private cache (falling back to `cache/` next to the mod),
-  and plays the file with the normal player. Seek, duration, loop, shuffle all
-  work as for local files. The cache holds the last 6 songs and is emptied on
-  first use/exit. The network worker only starts on your first search or online play.
-- **Status** (Resolving / Loading 42% / errors) is shown in the search bar.
-- **If it stops working:** YouTube changes clients without notice. The values to
-  bump live at the top of `src/Online.cpp` (client versions, user agents).
-  `levimusic.log` shows the HTTP status and playability reason for each failure.
-- This uses YouTube's private API, which its Terms of Service do not permit
-  outside official apps. Treat it as a personal-use experiment, and set
-  `online_enabled` to `false` to remove it entirely.
+- Open folders by tapping them; **UP** goes to the parent, and the **STORAGE**,
+  **MUSIC** and **DOWNLOAD** buttons jump to common places.
+- Tap songs to tick them (the selection is kept while you move between folders),
+  or use **SELECT ALL** for the current folder. Up to 32 songs per import.
+- Press **IMPORT n** to copy them into `<mod folder>/music`. Copying runs in the
+  background, shows progress, and never overwrites existing files (a copy gets
+  `(2)`, `(3)`, and so on). The library refreshes automatically afterwards.
+- `<mod folder>/music` is always scanned, so imported songs show up as a playlist.
+- The picker reads normal storage paths, so it only sees folders the game
+  process is allowed to read.
 
 ## Config
 `config/config.json` inside the mod folder (schema: `config.schema.json`):
@@ -67,9 +58,7 @@ the `.levipack` and the raw `.so`.
 The mod writes a log next to its library, in the same folder as `config/`:
 `<mod folder>/levimusic.log` (also sent to logcat under the tag `LeviMusic`).
 The first lines of a session show the build time (`build <date> <time>`), so
-you can confirm which build is installed. Setting `"online_enabled": false` in
-`config/config.json` disables all online code, which is a quick way to tell
-whether a problem comes from the online feature. Every load/enable step is logged, so the last line shows where something
+you can confirm which build is installed. Every load/enable step is logged, so the last line shows where something
 failed or hung. Send that file when reporting a problem.
 
 ## Preloader compatibility
