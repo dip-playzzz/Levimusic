@@ -1,0 +1,289 @@
+--- a/src/Online.cpp
++++ b/src/Online.cpp
+@@ -13,15 +13,42 @@
+ // playback stops working, these are the values to bump first.
+ constexpr const char* SearchUrl = "https://www.youtube.com/youtubei/v1/search?prettyPrint=false";
+ constexpr const char* PlayerUrl = "https://www.youtube.com/youtubei/v1/player?prettyPrint=false";
+-constexpr const char* WebClientVersion = "2.20250626.01.00";
++// Search tries these web client versions in order and remembers the first that works.
++constexpr const char* WebClientVersions[] = {"2.20250626.01.00", "2.20250925.01.00", "2.20251208.01.00"};
++constexpr int WebClientVersionCount = 3;
+ constexpr const char* WebUserAgent =
+     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36";
+-constexpr const char* VisionClientVersion = "1.02";
+-constexpr const char* VisionDeviceModel = "RealityDevice17,1";
+-constexpr const char* VisionOsVersion = "26.5.23O471";
+-// googlevideo checks that the media request uses the same user agent.
+-constexpr const char* VisionUserAgent =
+-    "Mozilla/5.0 (Macintosh; Intel Mac OS X 15_7_3) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.0 Safari/605.1.15";
++
++// Player clients, tried in order until one returns a playable audio URL.
++// googlevideo checks that media requests use the same user agent as the client
++// that resolved the URL, so the profile's user agent is reused for the download.
++struct ClientProfile {
++    const char* shortName;     // shown in the status line and the log
++    const char* clientName;
++    const char* clientVersion;
++    const char* clientId;      // X-YouTube-Client-Name
++    const char* contextExtra;  // JSON members (with trailing comma) added to the client object
++    const char* userAgent;
++    bool sendOrigin;
++};
++constexpr ClientProfile Clients[] = {
++    {"VR", "ANDROID_VR", "1.65.10", "28",
++     "\"deviceMake\":\"Oculus\",\"deviceModel\":\"Quest 3\",\"osName\":\"Android\","
++     "\"osVersion\":\"12L\",\"androidSdkVersion\":32,",
++     "com.google.android.apps.youtube.vr.oculus/1.65.10 (Linux; U; Android 12L; eureka-user Build/SQ3A.220605.009.A1) gzip",
++     false},
++    {"iOS", "IOS", "20.10.4", "5",
++     "\"deviceMake\":\"Apple\",\"deviceModel\":\"iPhone16,2\",\"osName\":\"iPhone\","
++     "\"osVersion\":\"18.3.2.22D82\",",
++     "com.google.ios.youtube/20.10.4 (iPhone16,2; U; CPU iOS 18_3_2 like Mac OS X;)",
++     false},
++    {"VisionOS", "VISIONOS", "1.02", "101",
++     "\"deviceMake\":\"Apple\",\"deviceModel\":\"RealityDevice17,1\",\"osName\":\"visionOS\","
++     "\"osVersion\":\"26.5.23O471\",",
++     "Mozilla/5.0 (Macintosh; Intel Mac OS X 15_7_3) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.0 Safari/605.1.15",
++     true},
++};
++constexpr int ClientCount = 3;
+ // Bounded Range requests: some googlevideo URLs reject open-ended ones.
+ constexpr long long ChunkBytes = 512 * 1024;
+ constexpr int SearchBufferBytes = 1536 * 1024;
+@@ -53,6 +80,7 @@
+ 
+     // Worker-thread only.
+     char visitor[256]{};
++    int webVersion{};   // index into WebClientVersions that last worked
+     char recent[RecentFiles][640]{};
+     int recentCount{};
+ };
+@@ -172,15 +200,15 @@
+     return true;
+ }
+ 
+-// POSTs a WEB-client search. Returns the HTTP status; body lands in `buffer`.
+-int webSearch(const char* query, char* buffer, int capacity) {
++// POSTs a WEB-client search with one client version.
++int webSearchOnce(const char* query, const char* version, char* buffer, int capacity) {
+     char body[1024];
+     usize at = 0;
+     at += static_cast<usize>(snprintf(
+         body, sizeof(body),
+         "{\"context\":{\"client\":{\"clientName\":\"WEB\",\"clientVersion\":\"%s\","
+         "\"hl\":\"en\",\"gl\":\"US\"}},\"params\":\"EgIQAQ%%3D%%3D\",\"query\":\"",
+-        WebClientVersion));
++        version));
+     appendEscaped(body, sizeof(body) - 4, at, query);
+     body[at++] = '"';
+     body[at++] = '}';
+@@ -194,12 +222,24 @@
+     const long started = nowMs();
+     const http::Result result = http::request(jni::javaVm(), "POST", SearchUrl,
+                                               headers, 4, body, -1, buffer, capacity, &g.quit);
+-    levi_log(LOG_INFO_VALUE, LogTag, "search http status=%d bytes=%lld in %ld ms",
+-             result.status, result.received, nowMs() - started);
++    levi_log(LOG_INFO_VALUE, LogTag, "search (web %s) http status=%d bytes=%lld in %ld ms",
++             version, result.status, result.received, nowMs() - started);
+     if (result.status == 200) captureVisitor(buffer, buffer + strlen(buffer));
+     return result.status;
+ }
+ 
++// Tries the remembered web version first, then the others.
++int webSearch(const char* query, char* buffer, int capacity) {
++    int status = -1;
++    for (int i = 0; i < WebClientVersionCount && !g.quit; ++i) {
++        const int index = (g.webVersion + i) % WebClientVersionCount;
++        status = webSearchOnce(query, WebClientVersions[index], buffer, capacity);
++        if (status == 200) { g.webVersion = index; return status; }
++        if (status < 0) break;   // no network: other versions will not help
++    }
++    return status;
++}
++
+ void ensureVisitor() {
+     if (g.visitor[0]) return;
+     char* buffer = static_cast<char*>(malloc(SearchBufferBytes));
+@@ -319,6 +359,7 @@
+     char url[3072];
+     char extension[8];
+     long long size;
++    const char* userAgent;
+ };
+ 
+ // Picks an audio-only format with a plain URL (no signature cipher).
+@@ -356,57 +397,107 @@
+     return bestScore > 0;
+ }
+ 
++// Counts audio formats and how many carry a plain url vs a signature cipher.
++void summarizeFormats(const char* body, const char* end, int& audio, int& plain, int& cipher) {
++    audio = plain = cipher = 0;
++    const char* list = json::findKey(body, end, "adaptiveFormats");
++    if (!list || *list != '[') return;
++    const char* listEnd = json::skipValue(list, end);
++    const char* p = json::skipSpace(list + 1, listEnd);
++    while (p < listEnd && *p != ']') {
++        if (*p != '{') { ++p; continue; }
++        const char* objectEnd = json::skipValue(p, listEnd);
++        char mime[48]{};
++        const char* mimeValue = json::findKey(p, objectEnd, "mimeType");
++        if (mimeValue && json::readString(mimeValue, objectEnd, mime, sizeof(mime)) &&
++            startsWith(mime, "audio/")) {
++            ++audio;
++            if (json::findKey(p, objectEnd, "url")) ++plain;
++            else if (json::findKey(p, objectEnd, "signatureCipher") ||
++                     json::findKey(p, objectEnd, "cipher")) ++cipher;
++        }
++        p = objectEnd;
++    }
++}
++
++// Asks one client profile for a stream. Returns true and fills `stream` on success;
++// otherwise writes a short reason (without the client prefix) to `reason`.
++bool tryClient(const ClientProfile& client, const char* id, char* buffer, int capacity,
++               Stream& stream, char* reason, usize reasonCap) {
++    char visitorField[320]{};
++    if (g.visitor[0]) snprintf(visitorField, sizeof(visitorField), ",\"visitorData\":\"%s\"", g.visitor);
++    char body[1536];
++    snprintf(body, sizeof(body),
++             "{\"context\":{\"client\":{\"clientName\":\"%s\",\"clientVersion\":\"%s\",%s"
++             "\"hl\":\"en\",\"gl\":\"US\"%s}},"
++             "\"videoId\":\"%s\",\"contentCheckOk\":true,\"racyCheckOk\":true}",
++             client.clientName, client.clientVersion, client.contextExtra, visitorField, id);
++
++    http::Header headers[6];
++    int count = 0;
++    headers[count++] = {"Content-Type", "application/json"};
++    headers[count++] = {"User-Agent", client.userAgent};
++    headers[count++] = {"X-YouTube-Client-Name", client.clientId};
++    headers[count++] = {"X-YouTube-Client-Version", client.clientVersion};
++    if (g.visitor[0]) headers[count++] = {"X-Goog-Visitor-Id", g.visitor};
++    if (client.sendOrigin) headers[count++] = {"Origin", "https://www.youtube.com"};
++
++    const long started = nowMs();
++    const http::Result result = http::request(jni::javaVm(), "POST", PlayerUrl,
++                                              headers, count, body, -1, buffer, capacity, &g.quit);
++    levi_log(LOG_INFO_VALUE, LogTag, "player[%s] http status=%d bytes=%lld in %ld ms",
++             client.shortName, result.status, result.received, nowMs() - started);
++    if (result.status != 200) {
++        snprintf(reason, reasonCap, result.status < 0 ? "no network" : "HTTP %d", result.status);
++        return false;
++    }
++    const char* end = buffer + strlen(buffer);
++    captureVisitor(buffer, end);
++    char state[48]{};
++    char why[96]{};
++    if (const char* playability = json::findKey(buffer, end, "playabilityStatus")) {
++        const char* pEnd = json::skipValue(playability, end);
++        json::readString(json::findKey(playability, pEnd, "status"), pEnd, state, sizeof(state));
++        json::readString(json::findKey(playability, pEnd, "reason"), pEnd, why, sizeof(why));
++    }
++    if (strcmp(state, "OK") != 0) {
++        copyString(reason, reasonCap, state[0] ? state : "unplayable");
++        levi_log(LOG_ERROR_VALUE, LogTag, "player[%s] %s: %s %s", client.shortName, id, state, why);
++        return false;
++    }
++    int audio = 0, plain = 0, cipher = 0;
++    summarizeFormats(buffer, end, audio, plain, cipher);
++    levi_log(LOG_INFO_VALUE, LogTag, "player[%s] %s: audio formats=%d plain-url=%d cipher=%d",
++             client.shortName, id, audio, plain, cipher);
++    if (chooseFormat(buffer, end, stream)) {
++        stream.userAgent = client.userAgent;
++        return true;
++    }
++    copyString(reason, reasonCap, cipher > 0 ? "needs signature" : "no audio url");
++    return false;
++}
++
+ bool resolveStream(const char* id, Stream& stream, char* error, usize errorCap) {
+     char* buffer = static_cast<char*>(malloc(PlayerBufferBytes));
+     if (!buffer) { copyString(error, errorCap, "Out of memory"); return false; }
++    ensureVisitor();
+     bool ok = false;
+-    for (int attempt = 0; attempt < 2 && !ok; ++attempt) {
+-        ensureVisitor();
+-        char visitor[320]{};
+-        if (g.visitor[0]) snprintf(visitor, sizeof(visitor), ",\"visitorData\":\"%s\"", g.visitor);
+-        char body[1280];
+-        snprintf(body, sizeof(body),
+-                 "{\"context\":{\"client\":{\"clientName\":\"VISIONOS\",\"clientVersion\":\"%s\","
+-                 "\"deviceMake\":\"Apple\",\"deviceModel\":\"%s\",\"osName\":\"visionOS\","
+-                 "\"osVersion\":\"%s\",\"hl\":\"en\",\"gl\":\"US\"%s}},"
+-                 "\"videoId\":\"%s\",\"contentCheckOk\":true,\"racyCheckOk\":true}",
+-                 VisionClientVersion, VisionDeviceModel, VisionOsVersion, visitor, id);
+-        const http::Header headers[] = {
+-            {"Content-Type", "application/json"},
+-            {"User-Agent", VisionUserAgent},
+-            {"X-Goog-Visitor-Id", g.visitor},
+-            {"Origin", "https://www.youtube.com"},
+-        };
+-        const long started = nowMs();
+-        const http::Result result = http::request(jni::javaVm(), "POST", PlayerUrl,
+-                                                  headers, 4, body, -1, buffer, PlayerBufferBytes, &g.quit);
+-        levi_log(LOG_INFO_VALUE, LogTag, "player http status=%d bytes=%lld in %ld ms",
+-                 result.status, result.received, nowMs() - started);
+-        if (result.status != 200) {
+-            snprintf(error, errorCap, result.status < 0 ? "No network" : "Player HTTP %d", result.status);
+-            g.visitor[0] = 0;   // refresh the session and retry once
+-            continue;
+-        }
+-        const char* end = buffer + strlen(buffer);
+-        captureVisitor(buffer, end);
+-        char state[48]{};
+-        char reason[96]{};
+-        if (const char* playability = json::findKey(buffer, end, "playabilityStatus")) {
+-            const char* pEnd = json::skipValue(playability, end);
+-            json::readString(json::findKey(playability, pEnd, "status"), pEnd, state, sizeof(state));
+-            json::readString(json::findKey(playability, pEnd, "reason"), pEnd, reason, sizeof(reason));
++    char firstError[96]{};
++    for (int i = 0; i < ClientCount && !ok && !g.quit; ++i) {
++        char reason[80]{};
++        memset(&stream, 0, sizeof(stream));
++        if (tryClient(Clients[i], id, buffer, PlayerBufferBytes, stream, reason, sizeof(reason))) {
++            ok = true;
++            levi_log(LOG_INFO_VALUE, LogTag, "player %s resolved by client %s (%s)",
++                     id, Clients[i].shortName, stream.extension);
++            break;
+         }
+-        if (strcmp(state, "OK") != 0) {
+-            copyString(error, errorCap, reason[0] ? reason : (state[0] ? state : "Unplayable"));
+-            levi_log(LOG_ERROR_VALUE, LogTag, "player %s: %s %s", id, state, reason);
+-            g.visitor[0] = 0;
+-            continue;
+-        }
+-        if (chooseFormat(buffer, end, stream)) { ok = true; break; }
+-        copyString(error, errorCap, "No direct audio stream");
+-        levi_log(LOG_ERROR_VALUE, LogTag, "player %s: no audio format with a plain url", id);
++        if (!firstError[0]) snprintf(firstError, sizeof(firstError), "%s: %s", Clients[i].shortName, reason);
++        g.visitor[0] = 0;   // fresh session for the next client
++        ensureVisitor();
+     }
+     free(buffer);
++    if (!ok) copyString(error, errorCap, firstError[0] ? firstError : "Could not resolve audio");
+     return ok;
+ }
+ 
+@@ -440,7 +531,7 @@
+         char range[64];
+         snprintf(range, sizeof(range), "bytes=%lld-%lld", written, last);
+         const http::Header headers[] = {
+-            {"User-Agent", VisionUserAgent},
++            {"User-Agent", stream.userAgent ? stream.userAgent : WebUserAgent},
+             {"Range", range},
+         };
+         const http::Result result = http::request(jni::javaVm(), "GET", stream.url,
+--- a/README.md
++++ b/README.md
+@@ -27,8 +27,9 @@
+ - **Direct streams:** paste/type an `http(s)` audio URL and press Enter. It is
+   streamed straight through Android's MediaPlayer (works for internet radio).
+ - **How YouTube results play:** search uses the InnerTube `/search` endpoint
+-  (WEB client); playback asks `/player` as the VISIONOS client for a pre-signed
+-  audio URL, downloads it in 512 KB `Range` chunks into the app's private cache (falling back to `cache/` next to the mod),
++  (WEB client, with a few version fallbacks); playback asks `/player` as the
++  ANDROID_VR, then IOS, then VISIONOS client until one returns a pre-signed
++  audio URL (the status line shows e.g. `VR: LOGIN_REQUIRED` for the first failure), downloads it in 512 KB `Range` chunks into the app's private cache (falling back to `cache/` next to the mod),
+   and plays the file with the normal player. Seek, duration, loop, shuffle all
+   work as for local files. The cache holds the last 6 songs and is emptied on
+   first use/exit. The network worker only starts on your first search or online play.

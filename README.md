@@ -27,8 +27,9 @@ Online search and playback are on by default (`"online_enabled": true`).
 - **Direct streams:** paste/type an `http(s)` audio URL and press Enter. It is
   streamed straight through Android's MediaPlayer (works for internet radio).
 - **How YouTube results play:** search uses the InnerTube `/search` endpoint
-  (WEB client); playback asks `/player` as the VISIONOS client for a pre-signed
-  audio URL, downloads it in 512 KB `Range` chunks into the app's private cache (falling back to `cache/` next to the mod),
+  (WEB client, with a few version fallbacks); playback asks `/player` as the
+  ANDROID_VR, then IOS, then VISIONOS client until one returns a pre-signed
+  audio URL (the status line shows e.g. `VR: LOGIN_REQUIRED` for the first failure), downloads it in 512 KB `Range` chunks into the app's private cache (falling back to `cache/` next to the mod),
   and plays the file with the normal player. Seek, duration, loop, shuffle all
   work as for local files. The cache holds the last 6 songs and is emptied on
   first use/exit. The network worker only starts on your first search or online play.
