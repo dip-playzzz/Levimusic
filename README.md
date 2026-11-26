@@ -14,23 +14,27 @@ against the current `libpreloader.so`.
 - Embedded album artwork and ID3 title/artist
 - Real FFT spectrum (needs RECORD_AUDIO) or a permission-free animated fallback
 - Mod Menu settings: volume, UI opacity/scale, auto-resolution scale, UI mode,
-  library limit, loop, shuffle, Pause/Stop buttons
+  library limit, loop, shuffle, Pause/Stop and Import Songs buttons
 - Panel position, page, sort and playlist are remembered
 - Never autoplays on game start
 
 ## Importing songs
-Press **IMPORT** (next to REFRESH) to open the in-game picker.
+Open the **LeviMusic module** in the Mod Menu and press **Import Songs (Google
+Files)**. Android's own file picker (Google Files / Documents UI) opens on top of
+the game:
 
-- Open folders by tapping them; **UP** goes to the parent, and the **STORAGE**,
-  **MUSIC** and **DOWNLOAD** buttons jump to common places.
-- Tap songs to tick them (the selection is kept while you move between folders),
-  or use **SELECT ALL** for the current folder. Up to 32 songs per import.
-- Press **IMPORT n** to copy them into `<mod folder>/music`. Copying runs in the
-  background, shows progress, and never overwrites existing files (a copy gets
-  `(2)`, `(3)`, and so on). The library refreshes automatically afterwards.
-- `<mod folder>/music` is always scanned, so imported songs show up as a playlist.
-- The picker reads normal storage paths, so it only sees folders the game
-  process is allowed to read.
+- Pick one or many audio files (mp3, m4a, aac, ogg, opus, wav, flac, ...).
+- They are copied into `/storage/emulated/0/Android/media/<launcher package>/LeviMusic`
+  (falls back to `<mod folder>/music`). That folder is always scanned, needs no
+  storage permission, and survives mod re-imports and launcher updates.
+- When the copy finishes the library refreshes by itself; check `levimusic.log`
+  for `import finished`. Existing files are never overwritten (copies get `(2)`).
+
+How it works: a tiny Java helper (`java/com/levimusic/picker`) is compiled to a
+dex during the build, embedded into the `.so`, and loaded at runtime with
+`InMemoryDexClassLoader`. It adds a headless Fragment to the running activity to
+receive the picker result. If the dex is missing the module still works and the
+log says `system file picker unavailable`.
 
 ## Config
 `config/config.json` inside the mod folder (schema: `config.schema.json`):

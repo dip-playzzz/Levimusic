@@ -74,6 +74,12 @@ JObject callStaticObjectMethodA(Env* env, JClass clazz, JMethodId method,
                                 const JValue* arguments);
 JBoolean callStaticBooleanMethodA(Env* env, JClass clazz, JMethodId method,
                                   const JValue* arguments);
+JInt callStaticIntMethodA(Env* env, JClass clazz, JMethodId method,
+                          const JValue* arguments);
+void callStaticVoidMethodA(Env* env, JClass clazz, JMethodId method,
+                           const JValue* arguments);
+void setByteArrayRegion(Env* env, JByteArray array, JSize start, JSize length,
+                        const JByte* data);
 JObject getObjectField(Env* env, JObject object, JFieldId field);
 JString newStringUtf(Env* env, const char* text);
 const char* getStringUtfChars(Env* env, JString text, JBoolean* isCopy = nullptr);

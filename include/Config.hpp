@@ -50,6 +50,8 @@ public:
     const LeviMusicConfig& config() const { return mConfig; }
     const char* configPath() const { return mConfigPath; }
     const char* modRoot() const { return mModRoot; }
+    // Folder the in-game IMPORT button copies songs to (always scanned).
+    const char* importDirectory() const { return mImportDir; }
 
 private:
     void defaults();
@@ -63,6 +65,7 @@ private:
 
     LeviMusicConfig mConfig{};
     char mModRoot[512]{};
+    char mImportDir[600]{};
     char mConfigDir[512]{};
     char mConfigPath[512]{};
     u64 mLastFileHash{};

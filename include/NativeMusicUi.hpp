@@ -113,26 +113,6 @@ private:
     void drawSearchIcon(float centerX, float centerY, float scale, u32 color);
     void drawCloseIcon(float centerX, float centerY, float scale, u32 color);
     void drawSortIcon(float centerX, float centerY, float scale, u32 color);
-    // In-game file picker that copies chosen songs into <mod folder>/music.
-    struct PickerEntry {
-        char name[128];
-        bool isDir;
-    };
-    static constexpr int MaxPickerEntries = 384;
-    static constexpr int MaxImportQueue = 32;
-    void openPicker();
-    void closePicker();
-    void loadPickerDirectory(const char* path);
-    void pickerGoUp();
-    void pickerToggleEntry(int entryIndex);
-    void pickerToggleAll();
-    bool pickerIsQueued(const char* fullPath) const;
-    void pickerFullPath(int entryIndex, char* out, usize capacity) const;
-    void startImport();
-    void finishImport();
-    void importWorker();
-    static void* importThreadThunk(void* self);
-
     void drawVolumeIcon(float centerX, float centerY, float scale,
                         bool muted, u32 color);
 
@@ -195,24 +175,7 @@ private:
     bool mSearchActive{};
     bool mFilterDirty{true};
     bool mSystemDarkMode{true};
-    PickerEntry mPickerEntries[MaxPickerEntries]{};
-    char mImportQueue[MaxImportQueue][512]{};
-    char mImportJob[MaxImportQueue][512]{};
-    char mPickerDir[512]{};
-    char mPickerStatus[96]{};
-    int mPickerCount{};
-    int mPickerPage{};
-    int mImportQueueCount{};
-    int mImportTotalFiles{};
-    int mImportPollFrames{};
-    PThread mImportThread{};
-    bool mPickerOpen{};
-    bool mImportThreadStarted{};
-    volatile int mImportRunning{};
-    volatile int mImportFinished{};
-    volatile int mImportAbort{};
-    volatile int mImportDoneFiles{};
-    volatile int mImportFailedFiles{};
+    int mPickerPollFrames{};
     MusicLibrary* mScanStaging{};
     LeviMusicConfig mScanConfig{};
     PThread mScanThread{};

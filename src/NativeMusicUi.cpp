@@ -1,4 +1,5 @@
 #include "NativeMusicUi.hpp"
+#include "FilePicker.hpp"
 #include "Config.hpp"
 #include "JniBridge.hpp"
 
@@ -29,15 +30,6 @@ static constexpr int ControlClearSearch = 15;
 static constexpr int ControlSort = 16;
 static constexpr int ControlMute = 17;
 static constexpr int ControlAllSource = 18;
-static constexpr int ControlImport = 19;
-static constexpr int ControlPickUp = 20;
-static constexpr int ControlPickPrev = 21;
-static constexpr int ControlPickNext = 22;
-static constexpr int ControlPickImport = 23;
-static constexpr int ControlPickCancel = 24;
-static constexpr int ControlPickAll = 25;
-static constexpr int ControlPickStorage = 26;   // 26..28 shortcut pills
-static constexpr int ControlPickRowBase = 200;
 static constexpr int ControlSourceBase = 40;
 static constexpr int ControlRowBase = 100;
 
@@ -227,6 +219,9 @@ void NativeMusicUi::initializeSettingsEntries() {
                    "Pause Playback", leviabi::ConfigType::Button, "");
     setConfigEntry(mSettings[mSettingCount++], "stop_playback",
                    "Stop Playback", leviabi::ConfigType::Button, "");
+    setConfigEntry(mSettings[mSettingCount++], "import_songs",
+                   "Import Songs (Google Files)",
+                   leviabi::ConfigType::Button, "");
 }
 
 void NativeMusicUi::shutdown() {
@@ -240,11 +235,6 @@ void NativeMusicUi::shutdown() {
         mScanStaging = nullptr;
     }
     mInitialScanApplied = false;
-    __atomic_store_n(&mImportAbort, 1, __ATOMIC_RELEASE);
-    if (mImportThreadStarted) {
-        pthread_join(mImportThread, nullptr);
-        mImportThreadStarted = false;
-    }
     stopAnimationThread();
     ScopedUiBusy guard(&mUiBusy, true);
     savePanelUiState();
@@ -369,15 +359,16 @@ void* NativeMusicUi::animationThreadThunk(void* pointer) {
             ScopedUiBusy guard(&self->mUiBusy, false);
             if (guard.locked()) self->finishScan();
         }
-        if (__atomic_load_n(&self->mImportFinished, __ATOMIC_ACQUIRE) != 0) {
-            ScopedUiBusy guard(&self->mUiBusy, false);
-            if (guard.locked()) self->finishImport();
-        } else if (__atomic_load_n(&self->mImportRunning, __ATOMIC_ACQUIRE) != 0 &&
-                   ++self->mImportPollFrames >= 8) {
-            self->mImportPollFrames = 0;
-            if (__atomic_load_n(&self->mOpen, __ATOMIC_ACQUIRE) != 0) {
-                ScopedUiBusy guard(&self->mUiBusy, false);
-                if (guard.locked()) self->renderUnlocked();
+        if (++self->mPickerPollFrames >= 20) {
+            self->mPickerPollFrames = 0;
+            if (filepicker::isReady() && filepicker::takeFinished()) {
+                const filepicker::Status result = filepicker::poll();
+                levi_log(LOG_INFO_VALUE, LogTag,
+                         "import finished: %d of %d imported, %d failed",
+                         result.total - result.failed, result.total,
+                         result.failed);
+                ScopedUiBusy guard(&self->mUiBusy, true);
+                self->requestRescan();
             }
         }
 
@@ -709,34 +700,6 @@ int NativeMusicUi::classifyControl(float x, float y, float panelX,
             sidebarY + 580.0f * scale, 94.0f * scale, 38.0f * scale))
         return ControlSourceNext;
 
-    if (mPickerOpen) {
-        const float px = mainX + 20.0f * scale;
-        if (hit(x, y, px, mainY + 82.0f * scale,
-                84.0f * scale, 44.0f * scale)) return ControlPickUp;
-        for (int i = 0; i < 3; ++i) {
-            if (hit(x, y, px + i * 112.0f * scale, mainY + 128.0f * scale,
-                    100.0f * scale, 30.0f * scale))
-                return ControlPickStorage + i;
-        }
-        if (hit(x, y, mainX + mainW - 140.0f * scale, mainY + 128.0f * scale,
-                120.0f * scale, 30.0f * scale)) return ControlPickAll;
-        const float pListY = mainY + 170.0f * scale;
-        const float pRowW = mainW - 40.0f * scale;
-        for (int row = 0; row < RowsPerPage; ++row) {
-            if (mPickerPage * RowsPerPage + row >= mPickerCount) break;
-            if (hit(x, y, px, pListY + row * 56.0f * scale,
-                    pRowW, 52.0f * scale)) return ControlPickRowBase + row;
-        }
-        const float pFooterY = mainY + 590.0f * scale;
-        if (hit(x, y, px, pFooterY, 102.0f * scale, 36.0f * scale))
-            return ControlPickCancel;
-        if (hit(x, y, mainX + mainW - 442.0f * scale, pFooterY,
-                170.0f * scale, 36.0f * scale)) return ControlPickImport;
-        if (hit(x, y, mainX + mainW - 174.0f * scale, pFooterY,
-                72.0f * scale, 36.0f * scale)) return ControlPickPrev;
-        if (hit(x, y, mainX + mainW - 92.0f * scale, pFooterY,
-                72.0f * scale, 36.0f * scale)) return ControlPickNext;
-    } else {
     const float searchX = mainX + 20.0f * scale;
     const float searchY = mainY + 82.0f * scale;
     const float searchW = mainW - 214.0f * scale;
@@ -763,14 +726,11 @@ int NativeMusicUi::classifyControl(float x, float y, float panelX,
     const float footerY = mainY + 590.0f * scale;
     if (hit(x, y, mainX + 20.0f * scale, footerY,
             102.0f * scale, 36.0f * scale)) return ControlRescan;
-    if (hit(x, y, mainX + 134.0f * scale, footerY,
-            102.0f * scale, 36.0f * scale)) return ControlImport;
     if (hit(x, y, mainX + mainW - 174.0f * scale, footerY,
             72.0f * scale, 36.0f * scale)) return ControlPagePrev;
     if (hit(x, y, mainX + mainW - 92.0f * scale, footerY,
             72.0f * scale, 36.0f * scale)) return ControlPageNext;
 
-    }
 
     const float centerX = panelX + panelW * 0.5f;
     const float controlsY = bottomY + 32.0f * scale;
@@ -1069,31 +1029,7 @@ void NativeMusicUi::activateControl(int control) {
         mCompletionIdleFrames = 0;
         mLastPlaybackPositionMs = 0;
         mLastPlaybackDurationMs = 0;
-    } else if (control == ControlImport) {
-        openPicker();
-    } else if (control == ControlPickCancel) {
-        closePicker();
-    } else if (control == ControlPickUp) {
-        pickerGoUp();
-    } else if (control == ControlPickAll) {
-        pickerToggleAll();
-    } else if (control == ControlPickImport) {
-        startImport();
-    } else if (control == ControlPickPrev) {
-        if (mPickerPage > 0) --mPickerPage;
-    } else if (control == ControlPickNext) {
-        const int pickerPages = (mPickerCount + RowsPerPage - 1) / RowsPerPage;
-        if (mPickerPage + 1 < pickerPages) ++mPickerPage;
-    } else if (control >= ControlPickStorage && control < ControlPickStorage + 3) {
-        static const char* const shortcuts[3] = {
-            "/storage/emulated/0", "/storage/emulated/0/Music",
-            "/storage/emulated/0/Download"};
-        loadPickerDirectory(shortcuts[control - ControlPickStorage]);
-    } else if (control >= ControlPickRowBase &&
-               control < ControlPickRowBase + RowsPerPage) {
-        pickerToggleEntry(mPickerPage * RowsPerPage +
-                          (control - ControlPickRowBase));
-    } else if (control == ControlSearch) {
+    } else if (control == ControlSearch) {    } else if (control == ControlSearch) {
         setSearchActive(true);
     } else if (control == ControlClearSearch) {
         clearSearch();
@@ -1116,7 +1052,6 @@ void NativeMusicUi::activateControl(int control) {
             mPlayer->setVolume(restored / 100.0f);
         }
     } else if (control == ControlAllSource) {
-        closePicker();
         mActiveTab = 0;
         mPage = 0;
         markFilterDirty();
@@ -1132,8 +1067,7 @@ void NativeMusicUi::activateControl(int control) {
         const int sourceIndex = mSourceOffset +
                                 (control - ControlSourceBase);
         if (sourceIndex < mLibrary->sourceCount()) {
-            closePicker();
-            mActiveTab = sourceIndex + 1;
+                mActiveTab = sourceIndex + 1;
             mPage = 0;
             markFilterDirty();
             rebuildVisibleIndex();
@@ -1970,7 +1904,6 @@ void NativeMusicUi::renderUnlocked() {
                  bodyFont, trackCountText, muted);
 
     const int selected = selectedGlobalIndex();
-    if (!mPickerOpen) {
     const float searchX = mainX + 20 * scale;
     const float searchY = mainY + 82 * scale;
     const float searchW = mainW - 214 * scale;
@@ -2094,16 +2027,9 @@ void NativeMusicUi::renderUnlocked() {
     addTextCentered(mainX + 20 * scale, footerY,
                     102 * scale, 36 * scale,
                     smallFont, "REFRESH", softWhite);
-    addRect(mainX + 134 * scale, footerY,
-            102 * scale, 36 * scale,
-            mPressedControl == ControlImport ? greenBright : green,
-            18 * scale);
-    addTextCentered(mainX + 134 * scale, footerY,
-                    102 * scale, 36 * scale,
-                    smallFont, "IMPORT", 0xFF06240Fu);
-    addCircle(mainX + 262 * scale, footerY + 18 * scale,
+    addCircle(mainX + 140 * scale, footerY + 18 * scale,
               4 * scale, green);
-    addText(mainX + 274 * scale, footerY + 10 * scale,
+    addText(mainX + 152 * scale, footerY + 10 * scale,
             smallFont, "LIVE LIBRARY", muted);
     char resultsText[32]{};
     snprintf(resultsText, sizeof(resultsText), "%d results", mVisibleCount);
@@ -2125,155 +2051,6 @@ void NativeMusicUi::renderUnlocked() {
     addTextCentered(mainX + mainW - 260 * scale,
                     footerY, 76 * scale, 36 * scale,
                     smallFont, pageText, muted);
-
-    } else {
-        // ---- In-game file picker ----
-        addRect(mainX, mainY, mainW, mainH, mainSurface, 16 * scale);
-        addText(mainX + 22 * scale, mainY + 18 * scale,
-                titleFont, "Import songs", white);
-        addText(mainX + 22 * scale, mainY + 51 * scale, smallFont,
-                "Open folders, tick songs, then press IMPORT to copy them into LeviMusic",
-                muted);
-        char queuedText[32]{};
-        snprintf(queuedText, sizeof(queuedText), "%d selected",
-                 mImportQueueCount);
-        addTextRight(mainX + mainW - 22 * scale, mainY + 24 * scale,
-                     bodyFont, queuedText, muted);
-
-        const float pickX = mainX + 20 * scale;
-        const float pickY = mainY + 82 * scale;
-        addRect(pickX, pickY, 84 * scale, 44 * scale,
-                mPressedControl == ControlPickUp ? hover : elevated,
-                22 * scale);
-        addTextCentered(pickX, pickY, 84 * scale, 44 * scale,
-                        smallFont, "UP", softWhite);
-        addRect(pickX + 92 * scale, pickY, mainW - 132 * scale,
-                44 * scale, elevated, 22 * scale);
-        addTextFlow(pickX + 112 * scale, pickY + 12 * scale, bodyFont,
-                    mPickerDir, mainW - 172 * scale, white);
-
-        static const char* const shortcutLabels[3] = {
-            "STORAGE", "MUSIC", "DOWNLOAD"};
-        for (int i = 0; i < 3; ++i) {
-            const float sx = pickX + i * 112 * scale;
-            addRect(sx, mainY + 128 * scale, 100 * scale, 30 * scale,
-                    mPressedControl == ControlPickStorage + i ? hover
-                                                              : elevated,
-                    15 * scale);
-            addTextCentered(sx, mainY + 128 * scale, 100 * scale,
-                            30 * scale, smallFont, shortcutLabels[i], muted);
-        }
-        addRect(mainX + mainW - 140 * scale, mainY + 128 * scale,
-                120 * scale, 30 * scale,
-                mPressedControl == ControlPickAll ? hover : elevated,
-                15 * scale);
-        addTextCentered(mainX + mainW - 140 * scale, mainY + 128 * scale,
-                        120 * scale, 30 * scale, smallFont,
-                        "SELECT ALL", muted);
-
-        const float pListY = mainY + 170 * scale;
-        const float pRowW = mainW - 40 * scale;
-        for (int row = 0; row < RowsPerPage; ++row) {
-            const int index = mPickerPage * RowsPerPage + row;
-            if (index >= mPickerCount) break;
-            const PickerEntry& entry = mPickerEntries[index];
-            char fullPath[768]{};
-            pickerFullPath(index, fullPath, sizeof(fullPath));
-            const bool queued = !entry.isDir && pickerIsQueued(fullPath);
-            const float y = pListY + row * 56 * scale;
-            const bool pressed = mPressedControl == ControlPickRowBase + row;
-            addRect(pickX, y, pRowW, 52 * scale,
-                    pressed ? hover : (queued ? selectedSurface : mainSurface),
-                    7 * scale);
-            if (entry.isDir) {
-                addRect(pickX + 16 * scale, y + 17 * scale,
-                        28 * scale, 19 * scale, green, 3 * scale);
-                addRect(pickX + 16 * scale, y + 13 * scale,
-                        13 * scale, 8 * scale, green, 2 * scale);
-            } else {
-                addRect(pickX + 16 * scale, y + 15 * scale,
-                        22 * scale, 22 * scale,
-                        queued ? green : elevated, 5 * scale);
-                if (queued) {
-                    addLine(pickX + 21 * scale, y + 27 * scale,
-                            pickX + 26 * scale, y + 32 * scale,
-                            2.5f * scale, 0xFF06240Fu);
-                    addLine(pickX + 26 * scale, y + 32 * scale,
-                            pickX + 34 * scale, y + 21 * scale,
-                            2.5f * scale, 0xFF06240Fu);
-                }
-            }
-            addTextFlow(pickX + 54 * scale, y + 16 * scale, bodyFont,
-                        entry.name, pRowW - 150 * scale,
-                        queued ? greenBright : white);
-            if (entry.isDir) {
-                addTextRight(pickX + pRowW - 18 * scale, y + 18 * scale,
-                             smallFont, "OPEN", dim);
-            } else {
-                const char* extension = strrchr(entry.name, '.');
-                addTextRight(pickX + pRowW - 18 * scale, y + 18 * scale,
-                             smallFont, extension ? extension + 1 : "AUDIO",
-                             muted);
-            }
-        }
-        if (mPickerCount == 0) {
-            addTextCentered(pickX, pListY + 120 * scale, pRowW, 42 * scale,
-                            sectionFont, "Nothing to show here", softWhite);
-            addTextCentered(pickX, pListY + 160 * scale, pRowW, 32 * scale,
-                            smallFont,
-                            mPickerStatus[0] ? mPickerStatus
-                                             : "Only folders and audio files are listed",
-                            muted);
-        }
-
-        const float pFooterY = mainY + 590 * scale;
-        addRect(pickX, pFooterY, 102 * scale, 36 * scale,
-                mPressedControl == ControlPickCancel ? hover : elevated,
-                18 * scale);
-        addTextCentered(pickX, pFooterY, 102 * scale, 36 * scale,
-                        smallFont, "BACK", softWhite);
-
-        const bool importing = mImportRunning != 0;
-        char progress[96]{};
-        if (importing)
-            snprintf(progress, sizeof(progress), "Importing %d / %d...",
-                     static_cast<int>(mImportDoneFiles), mImportTotalFiles);
-        const char* statusLine = importing ? progress : mPickerStatus;
-        if (statusLine[0] && mPickerCount > 0)
-            addTextFlow(mainX + 138 * scale, pFooterY + 10 * scale,
-                        smallFont, statusLine, 390 * scale, green);
-
-        const bool canImport = !importing && mImportQueueCount > 0;
-        const float importX = mainX + mainW - 442 * scale;
-        addRect(importX, pFooterY, 170 * scale, 36 * scale,
-                mPressedControl == ControlPickImport
-                    ? greenBright : (canImport ? green : elevated),
-                18 * scale);
-        char importLabel[32]{};
-        if (importing) snprintf(importLabel, sizeof(importLabel), "IMPORTING");
-        else snprintf(importLabel, sizeof(importLabel), "IMPORT %d",
-                      mImportQueueCount);
-        addTextCentered(importX, pFooterY, 170 * scale, 36 * scale,
-                        smallFont, importLabel,
-                        canImport ? 0xFF06240Fu : muted);
-
-        addRect(mainX + mainW - 174 * scale, pFooterY,
-                72 * scale, 36 * scale, elevated, 18 * scale);
-        addRect(mainX + mainW - 92 * scale, pFooterY,
-                72 * scale, 36 * scale, elevated, 18 * scale);
-        drawPreviousIcon(mainX + mainW - 138 * scale,
-                         pFooterY + 18 * scale, 0.65f * scale, muted);
-        drawNextIcon(mainX + mainW - 56 * scale,
-                     pFooterY + 18 * scale, 0.65f * scale, muted);
-        int pickerPages = (mPickerCount + RowsPerPage - 1) / RowsPerPage;
-        if (pickerPages <= 0) pickerPages = 1;
-        char pickerPageText[24]{};
-        snprintf(pickerPageText, sizeof(pickerPageText), "%d / %d",
-                 mPickerPage + 1, pickerPages);
-        addTextCentered(mainX + mainW - 260 * scale, pFooterY,
-                        76 * scale, 36 * scale, smallFont,
-                        pickerPageText, muted);
-    }
 
     const MusicTrack* selectedTrack = mLibrary->track(selected);
     const char* songTitle = selectedTrack
@@ -2399,313 +2176,3 @@ void NativeMusicUi::renderUnlocked() {
     mVisible = mCommandCount > 0 ? 1 : 0;
 }
 
-// ---------------------------------------------------------------------------
-// In-game file picker and importer
-// ---------------------------------------------------------------------------
-
-static bool fileExists(const char* path) {
-    const int fd = open(path, O_RDONLY_VALUE);
-    if (fd < 0) return false;
-    close(fd);
-    return true;
-}
-
-void NativeMusicUi::openPicker() {
-    setSearchActive(false);
-    mPickerOpen = true;
-    mPickerStatus[0] = 0;
-    if (!mPickerDir[0]) {
-        static const char* const starts[] = {
-            "/storage/emulated/0/Download", "/storage/emulated/0",
-            "/sdcard"};
-        copyString(mPickerDir, sizeof(mPickerDir), starts[2]);
-        for (usize i = 0; i < sizeof(starts) / sizeof(starts[0]); ++i) {
-            DIR* probe = opendir(starts[i]);
-            if (probe) {
-                closedir(probe);
-                copyString(mPickerDir, sizeof(mPickerDir), starts[i]);
-                break;
-            }
-        }
-    }
-    char start[512];
-    copyString(start, sizeof(start), mPickerDir);
-    loadPickerDirectory(start);
-}
-
-void NativeMusicUi::closePicker() {
-    mPickerOpen = false;
-    mPickerStatus[0] = 0;
-}
-
-void NativeMusicUi::loadPickerDirectory(const char* path) {
-    mPickerCount = 0;
-    mPickerPage = 0;
-    mPickerStatus[0] = 0;
-    copyString(mPickerDir, sizeof(mPickerDir), path);
-    usize length = strlen(mPickerDir);
-    while (length > 1 && mPickerDir[length - 1] == '/')
-        mPickerDir[--length] = 0;
-
-    DIR* directory = opendir(mPickerDir);
-    if (!directory) {
-        copyString(mPickerStatus, sizeof(mPickerStatus),
-                   "Cannot open this folder (no access)");
-        return;
-    }
-    while (DirEnt* item = readdir(directory)) {
-        if (mPickerCount >= MaxPickerEntries) break;
-        if (item->d_name[0] == '.') continue;   // ".", ".." and hidden files
-
-        bool isDir = item->d_type == DT_DIR_VALUE;
-        if (!isDir && item->d_type != DT_REG_VALUE) {
-            // Unknown or symlink: probing with opendir tells folders apart.
-            char child[768]{};
-            copyString(child, sizeof(child), mPickerDir);
-            if (strcmp(mPickerDir, "/") != 0) appendString(child, sizeof(child), "/");
-            appendString(child, sizeof(child), item->d_name);
-            DIR* probe = opendir(child);
-            if (probe) {
-                closedir(probe);
-                isDir = true;
-            }
-        }
-        if (!isDir && !MusicLibrary::isAudioPath(item->d_name)) continue;
-
-        PickerEntry& entry = mPickerEntries[mPickerCount++];
-        copyString(entry.name, sizeof(entry.name), item->d_name);
-        entry.isDir = isDir;
-    }
-    closedir(directory);
-
-    // Folders first, then songs, each group A-Z.
-    for (int i = 1; i < mPickerCount; ++i) {
-        PickerEntry moving = mPickerEntries[i];
-        int j = i - 1;
-        while (j >= 0) {
-            const PickerEntry& other = mPickerEntries[j];
-            const bool movesBefore =
-                (moving.isDir && !other.isDir) ||
-                (moving.isDir == other.isDir &&
-                 compareIgnoreCase(moving.name, other.name) < 0);
-            if (!movesBefore) break;
-            mPickerEntries[j + 1] = other;
-            --j;
-        }
-        mPickerEntries[j + 1] = moving;
-    }
-    if (mPickerCount == 0)
-        copyString(mPickerStatus, sizeof(mPickerStatus),
-                   "No folders or audio files here");
-}
-
-void NativeMusicUi::pickerGoUp() {
-    char parent[512];
-    copyString(parent, sizeof(parent), mPickerDir);
-    char* slash = strrchr(parent, '/');
-    if (!slash || slash == parent) return;
-    *slash = 0;
-    if (strncmp(parent, "/storage", 8) != 0) return;   // stay inside storage
-    loadPickerDirectory(parent);
-}
-
-void NativeMusicUi::pickerFullPath(int entryIndex, char* out,
-                                   usize capacity) const {
-    if (entryIndex < 0 || entryIndex >= mPickerCount) {
-        if (capacity) out[0] = 0;
-        return;
-    }
-    copyString(out, capacity, mPickerDir);
-    if (strcmp(mPickerDir, "/") != 0) appendString(out, capacity, "/");
-    appendString(out, capacity, mPickerEntries[entryIndex].name);
-}
-
-bool NativeMusicUi::pickerIsQueued(const char* fullPath) const {
-    for (int i = 0; i < mImportQueueCount; ++i) {
-        if (strcmp(mImportQueue[i], fullPath) == 0) return true;
-    }
-    return false;
-}
-
-void NativeMusicUi::pickerToggleEntry(int entryIndex) {
-    if (entryIndex < 0 || entryIndex >= mPickerCount) return;
-    char fullPath[768]{};
-    pickerFullPath(entryIndex, fullPath, sizeof(fullPath));
-    if (mPickerEntries[entryIndex].isDir) {
-        loadPickerDirectory(fullPath);
-        return;
-    }
-    mPickerStatus[0] = 0;
-    for (int i = 0; i < mImportQueueCount; ++i) {
-        if (strcmp(mImportQueue[i], fullPath) == 0) {
-            for (int j = i; j + 1 < mImportQueueCount; ++j)
-                copyString(mImportQueue[j], sizeof(mImportQueue[j]),
-                           mImportQueue[j + 1]);
-            mImportQueue[--mImportQueueCount][0] = 0;
-            return;
-        }
-    }
-    if (mImportQueueCount >= MaxImportQueue) {
-        copyString(mPickerStatus, sizeof(mPickerStatus),
-                   "Selection full (32 songs per import)");
-        return;
-    }
-    copyString(mImportQueue[mImportQueueCount++],
-               sizeof(mImportQueue[0]), fullPath);
-}
-
-void NativeMusicUi::pickerToggleAll() {
-    int files = 0;
-    int queued = 0;
-    for (int i = 0; i < mPickerCount; ++i) {
-        if (mPickerEntries[i].isDir) continue;
-        char fullPath[768]{};
-        pickerFullPath(i, fullPath, sizeof(fullPath));
-        ++files;
-        if (pickerIsQueued(fullPath)) ++queued;
-    }
-    if (files == 0) return;
-    const bool removeAll = queued == files;
-    for (int i = 0; i < mPickerCount; ++i) {
-        if (mPickerEntries[i].isDir) continue;
-        char fullPath[768]{};
-        pickerFullPath(i, fullPath, sizeof(fullPath));
-        const bool isQueued = pickerIsQueued(fullPath);
-        if (removeAll == isQueued) pickerToggleEntry(i);
-    }
-}
-
-void NativeMusicUi::startImport() {
-    if (mImportRunning) return;
-    if (mImportQueueCount <= 0) {
-        copyString(mPickerStatus, sizeof(mPickerStatus),
-                   "Tick some songs first");
-        return;
-    }
-    for (int i = 0; i < mImportQueueCount; ++i)
-        copyString(mImportJob[i], sizeof(mImportJob[i]), mImportQueue[i]);
-    mImportTotalFiles = mImportQueueCount;
-    mImportDoneFiles = 0;
-    mImportFailedFiles = 0;
-    mImportAbort = 0;
-    mImportFinished = 0;
-    mImportRunning = 1;
-    mImportQueueCount = 0;
-    mPickerStatus[0] = 0;
-    if (pthread_create(&mImportThread, nullptr, &importThreadThunk, this) != 0) {
-        mImportRunning = 0;
-        copyString(mPickerStatus, sizeof(mPickerStatus),
-                   "Could not start the import");
-        return;
-    }
-    mImportThreadStarted = true;
-}
-
-void* NativeMusicUi::importThreadThunk(void* self) {
-    static_cast<NativeMusicUi*>(self)->importWorker();
-    return nullptr;
-}
-
-// Runs on its own thread so copying large files never blocks the game.
-void NativeMusicUi::importWorker() {
-    char destDir[600];
-    snprintf(destDir, sizeof(destDir), "%s/music", mConfig->modRoot());
-    mkdir(destDir, 0755);
-    const usize destDirLength = strlen(destDir);
-
-    constexpr int ChunkBytes = 256 * 1024;
-    char* buffer = static_cast<char*>(malloc(ChunkBytes));
-
-    for (int i = 0; i < mImportTotalFiles && !mImportAbort; ++i) {
-        const char* source = mImportJob[i];
-        const char* slash = strrchr(source, '/');
-        const char* name = slash ? slash + 1 : source;
-
-        // Already inside the mod's music folder: nothing to copy.
-        if (strncmp(source, destDir, destDirLength) == 0 &&
-            source[destDirLength] == '/') {
-            __atomic_add_fetch(&mImportDoneFiles, 1, __ATOMIC_RELEASE);
-            continue;
-        }
-        if (!buffer) {
-            __atomic_add_fetch(&mImportFailedFiles, 1, __ATOMIC_RELEASE);
-            __atomic_add_fetch(&mImportDoneFiles, 1, __ATOMIC_RELEASE);
-            continue;
-        }
-
-        // Pick a destination name that does not overwrite an existing song.
-        char dest[900];
-        snprintf(dest, sizeof(dest), "%s/%s", destDir, name);
-        for (int n = 2; fileExists(dest) && n < 100; ++n) {
-            char stem[300];
-            copyString(stem, sizeof(stem), name);
-            const char* extension = "";
-            if (char* dot = strrchr(stem, '.')) {
-                extension = name + (dot - stem);
-                *dot = 0;
-            }
-            snprintf(dest, sizeof(dest), "%s/%s (%d)%s", destDir, stem, n,
-                     extension);
-        }
-        char temp[960];
-        snprintf(temp, sizeof(temp), "%s.part", dest);
-
-        bool ok = false;
-        const int in = open(source, O_RDONLY_VALUE);
-        if (in >= 0) {
-            const int out = open(temp, O_WRONLY_VALUE | O_CREAT_VALUE |
-                                           O_TRUNC_VALUE, 0644);
-            if (out >= 0) {
-                ok = true;
-                for (;;) {
-                    if (mImportAbort) { ok = false; break; }
-                    const long got = read(in, buffer, ChunkBytes);
-                    if (got < 0) { ok = false; break; }
-                    if (got == 0) break;
-                    long written = 0;
-                    while (written < got) {
-                        const long put = write(out, buffer + written,
-                                               static_cast<usize>(got - written));
-                        if (put <= 0) { ok = false; break; }
-                        written += put;
-                    }
-                    if (!ok) break;
-                }
-                close(out);
-            }
-            close(in);
-        }
-        if (ok && rename(temp, dest) == 0) {
-            levi_log(LOG_INFO_VALUE, LogTag, "imported %s", dest);
-        } else {
-            unlink(temp);
-            __atomic_add_fetch(&mImportFailedFiles, 1, __ATOMIC_RELEASE);
-            levi_log(LOG_ERROR_VALUE, LogTag, "import failed: %s", source);
-        }
-        __atomic_add_fetch(&mImportDoneFiles, 1, __ATOMIC_RELEASE);
-    }
-    free(buffer);
-    __atomic_store_n(&mImportRunning, 0, __ATOMIC_RELEASE);
-    __atomic_store_n(&mImportFinished, 1, __ATOMIC_RELEASE);
-}
-
-// Called on the UI side once the worker has finished.
-void NativeMusicUi::finishImport() {
-    if (mImportThreadStarted) {
-        pthread_join(mImportThread, nullptr);
-        mImportThreadStarted = false;
-    }
-    __atomic_store_n(&mImportFinished, 0, __ATOMIC_RELEASE);
-    const int total = mImportTotalFiles;
-    const int failed = mImportFailedFiles;
-    if (mImportAbort)
-        copyString(mPickerStatus, sizeof(mPickerStatus), "Import cancelled");
-    else if (failed > 0)
-        snprintf(mPickerStatus, sizeof(mPickerStatus),
-                 "Imported %d, %d failed (see levimusic.log)", total - failed, failed);
-    else
-        snprintf(mPickerStatus, sizeof(mPickerStatus),
-                 "Imported %d song%s", total, total == 1 ? "" : "s");
-    rescanLibraryPreservingState();
-    if (__atomic_load_n(&mOpen, __ATOMIC_ACQUIRE) != 0) renderUnlocked();
-}

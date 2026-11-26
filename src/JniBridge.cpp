@@ -24,6 +24,9 @@ constexpr usize GetIntFieldIndex = 100;
 constexpr usize GetStaticMethodIdIndex = 113;
 constexpr usize CallStaticObjectMethodAIndex = 116;
 constexpr usize CallStaticBooleanMethodAIndex = 119;
+constexpr usize CallStaticIntMethodAIndex = 131;
+constexpr usize CallStaticVoidMethodAIndex = 143;
+constexpr usize SetByteArrayRegionIndex = 208;
 constexpr usize NewStringUtfIndex = 167;
 constexpr usize GetStringUtfCharsIndex = 169;
 constexpr usize ReleaseStringUtfCharsIndex = 170;
@@ -156,6 +159,29 @@ JBoolean callStaticBooleanMethodA(Env* env, JClass clazz, JMethodId method,
     auto function = envFunction<Fn>(env, CallStaticBooleanMethodAIndex);
     return function && clazz && method ? function(env, clazz, method, arguments)
                                        : static_cast<JBoolean>(0);
+}
+
+JInt callStaticIntMethodA(Env* env, JClass clazz, JMethodId method,
+                          const JValue* arguments) {
+    using Fn = JInt (*)(Env*, JClass, JMethodId, const JValue*);
+    auto function = envFunction<Fn>(env, CallStaticIntMethodAIndex);
+    return function && clazz && method ? function(env, clazz, method, arguments)
+                                       : 0;
+}
+
+void callStaticVoidMethodA(Env* env, JClass clazz, JMethodId method,
+                           const JValue* arguments) {
+    using Fn = void (*)(Env*, JClass, JMethodId, const JValue*);
+    auto function = envFunction<Fn>(env, CallStaticVoidMethodAIndex);
+    if (function && clazz && method) function(env, clazz, method, arguments);
+}
+
+void setByteArrayRegion(Env* env, JByteArray array, JSize start, JSize length,
+                        const JByte* data) {
+    using Fn = void (*)(Env*, JByteArray, JSize, JSize, const JByte*);
+    auto function = envFunction<Fn>(env, SetByteArrayRegionIndex);
+    if (function && array && data && length > 0)
+        function(env, array, start, length, data);
 }
 
 JObject getObjectField(Env* env, JObject object, JFieldId field) {

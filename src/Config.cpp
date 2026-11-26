@@ -44,10 +44,29 @@ void ConfigManager::defaults() {
     mConfig.uiSourceOffset = 0;
     mConfig.uiActivePlaylist[0] = 0;
     // Songs imported with the in-game picker live here and are always scanned.
-    char ownMusic[600];
-    snprintf(ownMusic, sizeof(ownMusic), "%s/music", mModRoot);
-    mkdir(ownMusic, 0755);
-    addMusicDirectory(ownMusic);
+    // The launcher's own app-specific media folder needs no storage permission
+    // and survives launcher updates; Google Files can also copy songs into it.
+    mImportDir[0] = 0;
+    {
+        static const char* const prefixes[] = {"/data/data/", "/data/user/0/"};
+        for (usize i = 0; i < sizeof(prefixes) / sizeof(prefixes[0]); ++i) {
+            const usize prefixLength = strlen(prefixes[i]);
+            if (strncmp(mModRoot, prefixes[i], prefixLength) != 0) continue;
+            const char* package = mModRoot + prefixLength;
+            const char* end = strchr(package, '/');
+            const int length = end ? static_cast<int>(end - package)
+                                   : static_cast<int>(strlen(package));
+            if (length > 0)
+                snprintf(mImportDir, sizeof(mImportDir),
+                         "/storage/emulated/0/Android/media/%.*s/LeviMusic",
+                         length, package);
+            break;
+        }
+        if (!mImportDir[0])
+            snprintf(mImportDir, sizeof(mImportDir), "%s/music", mModRoot);
+        mkdir(mImportDir, 0755);
+    }
+    addMusicDirectory(mImportDir);
     addMusicDirectory("/storage/emulated/0/Music");
     addMusicDirectory("/storage/emulated/0/Download");
     addMusicDirectory("/storage/emulated/0/Downloads");

@@ -1,4 +1,5 @@
 #include "LeviMusicMod.hpp"
+#include "FilePicker.hpp"
 #include "JniBridge.hpp"
 
 static LeviMusicMod gLeviMusicMod;
@@ -77,6 +78,10 @@ void LeviMusicMod::applySetting(const char* key, const char* value) {
     } else if (strcmp(key, "stop_playback") == 0) {
         mPlayer.stop();
         mUi.redraw();
+    } else if (strcmp(key, "import_songs") == 0) {
+        if (!filepicker::open())
+            levi_log(LOG_WARN_VALUE, LogTag,
+                     "import: the system file picker is not available");
     }
 }
 
@@ -184,6 +189,10 @@ bool LeviMusicMod::enable(void* context) {
         mPlayer.shutdown();
         return false;
     }
+    if (!filepicker::init(mConfig.importDirectory()))
+        levi_log(LOG_WARN_VALUE, LogTag,
+                 "system file picker unavailable; songs can still be copied into %s",
+                 mConfig.importDirectory());
     levi_log(LOG_INFO_VALUE, LogTag, "enable: hooks");
     if (!mToggleHook.initialize(&mApi, &mUi)) {
         mUi.shutdown();

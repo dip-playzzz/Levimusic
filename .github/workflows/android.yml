@@ -21,12 +21,19 @@ jobs:
         with:
           packages: platform-tools
 
-      - name: Install Android NDK
-        run: sdkmanager "ndk;28.2.13676358"
+      - name: Install Android NDK and the pieces needed for the picker dex
+        run: sdkmanager "ndk;28.2.13676358" "platforms;android-35" "build-tools;35.0.0"
+
+      - name: Set up JDK (compiles the picker helper)
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
 
       - name: Build and package
         run: |
           export ANDROID_NDK_ROOT="$ANDROID_HOME/ndk/28.2.13676358"
+          export REQUIRE_PICKER=1
           ./package.sh "$GITHUB_WORKSPACE/LeviMusic.levipack"
 
       - name: Upload .levipack
