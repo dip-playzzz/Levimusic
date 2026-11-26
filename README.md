@@ -5,7 +5,13 @@ Built on the OfflineMusicPlayer V1.6.0 engine and UI, rebranded and verified
 against the current `libpreloader.so`.
 
 ## Features
-- Native in-game player panel (drag to move, scale, opacity, dark/light/system theme)
+- Compact single-card player (560x410 base units) in the LeviVC style: soft dark
+  surfaces, mint accent, status chip, drag the header to move it
+- Scrollable song list (drag to scroll, momentum fling, scroll indicator); the
+  source chip cycles All music / each folder, the sort chip cycles the order
+- Redraws only when something changes (about 7 fps while playing, once on
+  state changes) instead of 20 times a second, so the game keeps its FPS
+- Theme, scale and opacity options (dark/light/system theme)
 - Folder scanning: `Music`, `Download`, `Downloads` + your own `music_directories`;
   every non-empty folder becomes a playlist tab; hot-reloads when the config changes
 - Play / pause / stop / next / previous, seek bar, volume + mute

@@ -66,6 +66,16 @@ private:
                         float maxWidth, float lineHeight, int maxLines,
                         u32 color);
     float estimateTextWidth(const char* text, float size) const;
+    // Soft "neomorphic" surfaces: a dark and a light offset copy under the face.
+    void addRaised(float x, float y, float w, float h, float radius,
+                   float scale, u32 face, u32 darkEdge, u32 lightEdge);
+    void addInset(float x, float y, float w, float h, float radius,
+                  float scale, u32 face, u32 darkEdge, u32 lightEdge);
+    float maxScroll() const;
+    void clampScroll();
+    void syncPageFromScroll();
+    void scrollToVisibleIndex(int visibleIndex);
+    void stepFling();
     void addImage(float x, float y, float w, float h,
                   const char* imageId, u32 color = 0xFFFFFFFFu);
     u32 applyUiOpacity(u32 color) const;
@@ -110,7 +120,8 @@ private:
     void drawShuffleIcon(float centerX, float centerY, float scale, u32 color);
     void drawLoopIcon(float centerX, float centerY, float scale,
                       int loopMode, u32 color);
-    void drawSearchIcon(float centerX, float centerY, float scale, u32 color);
+    void drawSearchIcon(float centerX, float centerY, float scale, u32 color,
+                        u32 hole = 0xFF242424u);
     void drawCloseIcon(float centerX, float centerY, float scale, u32 color);
     void drawSortIcon(float centerX, float centerY, float scale, u32 color);
     void drawVolumeIcon(float centerX, float centerY, float scale,
@@ -134,7 +145,18 @@ private:
     int mVisibleCount{};
     int mCommandCount{};
     int mSettingCount{};
-    int mPage{};
+    int mPage{};           // first visible row (persisted as ui_page)
+    int mLastUiSig{-1};
+    int mScrollPointerId{-1};
+    float mScrollPx{};     // list scroll offset in base (unscaled) units
+    float mFlingVel{};     // base units per ~16 ms step
+    float mScrollVelPerMs{};
+    float mTouchStartY{};
+    float mScrollStartPx{};
+    float mLastTouchY{};
+    long long mLastTouchMs{};
+    bool mScrollTouching{};
+    bool mScrolling{};
     int mActiveTab{}; // 0 = All, 1..N = source index + 1
     int mSourceOffset{};
     int mPressedControl{};

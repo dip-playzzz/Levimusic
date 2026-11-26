@@ -7,10 +7,28 @@ static NativeMusicUi* gNativeMusicUi = nullptr;
 static constexpr const char* ModuleId = "levi_music";
 static constexpr const char* LogTag = "LeviMusic";
 
-static constexpr float BasePanelWidth = 1240.0f;
-static constexpr float BasePanelHeight = 760.0f;
-static constexpr int RowsPerPage = 7;
+// Compact single-card layout. All numbers are base units (scale == 1.0 -> px).
+static constexpr float BasePanelWidth = 560.0f;
+static constexpr float BasePanelHeight = 410.0f;
 static constexpr int VisibleSources = 7;
+static constexpr float HeaderH = 60.0f;
+static constexpr float SearchRowY = 68.0f;
+static constexpr float SearchRowH = 38.0f;
+static constexpr float ListX = 14.0f;
+static constexpr float ListY = 116.0f;
+static constexpr float ListW = 532.0f;
+static constexpr float ListH = 192.0f;
+static constexpr float RowPitch = 48.0f;
+static constexpr float RowHeight = 44.0f;
+static constexpr float ScrollBarGutter = 12.0f;
+static constexpr float PlayerX = 10.0f;
+static constexpr float PlayerY = 316.0f;
+static constexpr float PlayerW = 540.0f;
+static constexpr float PlayerH = 82.0f;
+static constexpr float SeekX = 62.0f;
+static constexpr float SeekW = 248.0f;
+static constexpr float VolX = 398.0f;
+static constexpr float VolW = 136.0f;
 
 static constexpr int ControlRescan = 1;
 static constexpr int ControlPagePrev = 2;
@@ -30,8 +48,17 @@ static constexpr int ControlClearSearch = 15;
 static constexpr int ControlSort = 16;
 static constexpr int ControlMute = 17;
 static constexpr int ControlAllSource = 18;
+static constexpr int ControlSourceCycle = 19;
+static constexpr int ControlListArea = 20;
 static constexpr int ControlSourceBase = 40;
 static constexpr int ControlRowBase = 100;
+
+static long long monotonicMs() {
+    TimeSpec ts{};
+    clock_gettime(1, &ts);   // CLOCK_MONOTONIC
+    return static_cast<long long>(ts.tv_sec) * 1000LL +
+           static_cast<long long>(ts.tv_nsec / 1000000L);
+}
 
 static float minFloat(float a, float b) { return a < b ? a : b; }
 static float maxFloat(float a, float b) { return a > b ? a : b; }
@@ -301,7 +328,6 @@ bool NativeMusicUi::textThunk(const char* text, usize size) {
 void* NativeMusicUi::animationThreadThunk(void* pointer) {
     auto* self = static_cast<NativeMusicUi*>(pointer);
     if (!self) return nullptr;
-    const TimeSpec frameDelay{0, 50000000L};
     while (__atomic_load_n(&self->mAnimationStop, __ATOMIC_ACQUIRE) == 0) {
         ++self->mAnimationFrame;
         if (self->mSwitchCooldownFrames > 0) --self->mSwitchCooldownFrames;
@@ -397,12 +423,38 @@ void* NativeMusicUi::animationThreadThunk(void* pointer) {
             if (guard.locked()) {
                 self->tickPlaybackUnlocked();
                 if (__atomic_load_n(&self->mOpen, __ATOMIC_ACQUIRE) != 0) {
-                    if (self->mFilterDirty) self->rebuildVisibleIndex();
-                    self->renderUnlocked();
+                    // Redraw only when something visible can have changed.
+                    bool redraw = false;
+                    if (self->mFilterDirty) {
+                        self->rebuildVisibleIndex();
+                        redraw = true;
+                    }
+                    const int sig = (self->mSnapshot.playing ? 1 : 0) |
+                                    (self->mSnapshot.paused ? 2 : 0) |
+                                    (self->mSnapshot.hasMedia ? 4 : 0) |
+                                    ((self->mSnapshot.positionMs / 1000) << 3);
+                    if (sig != self->mLastUiSig) {
+                        self->mLastUiSig = sig;
+                        redraw = true;
+                    }
+                    if (self->mSnapshot.playing &&
+                        (self->mAnimationFrame % 3) == 0) redraw = true;
+                    if (self->mSearchActive &&
+                        (self->mAnimationFrame % 8) == 0) redraw = true;
+                    if (redraw) self->renderUnlocked();
                 }
             }
         }
-        nanosleep(&frameDelay, nullptr);
+        // Sleep in ~16 ms slices so list momentum scrolling stays smooth
+        // while the rest of the loop keeps its original ~50 ms cadence.
+        const TimeSpec sliceDelay{0, 16000000L};
+        for (int slice = 0; slice < 3; ++slice) {
+            nanosleep(&sliceDelay, nullptr);
+            if (self->mFlingVel != 0.0f) {
+                ScopedUiBusy guard(&self->mUiBusy, false);
+                if (guard.locked()) self->stepFling();
+            }
+        }
     }
     return nullptr;
 }
@@ -459,7 +511,8 @@ void NativeMusicUi::restorePanelUiState() {
     if (!mConfig || !mLibrary) return;
     const LeviMusicConfig& config = mConfig->config();
     mSortMode = config.uiSortMode;
-    mPage = config.uiPage;
+    mPage = config.uiPage < 0 ? 0 : config.uiPage;
+    mScrollPx = static_cast<float>(mPage) * RowPitch;
     mSourceOffset = config.uiSourceOffset;
     mActiveTab = 0;
     if (config.uiActivePlaylist[0]) {
@@ -539,7 +592,7 @@ void NativeMusicUi::calculateLayout(float& x, float& y, float& w, float& h,
     if (mConfig->config().autoResolutionScale) {
         float fitScale = minFloat((screenW - 8.0f) / BasePanelWidth,
                                   (screenH - 8.0f) / BasePanelHeight);
-        fitScale = clampFloat(fitScale, 0.30f, 1.0f);
+        fitScale = clampFloat(fitScale, 0.30f, 1.50f);
         scale = minFloat(manualScale, fitScale);
     } else {
         scale = manualScale;
@@ -618,9 +671,7 @@ void NativeMusicUi::rebuildVisibleIndex() {
         mVisibleIndices[insert] = global;
         ++mVisibleCount;
     }
-    const int pages = (mVisibleCount + RowsPerPage - 1) / RowsPerPage;
-    if (pages <= 0) mPage = 0;
-    else if (mPage >= pages) mPage = pages - 1;
+    clampScroll();
     mFilterDirty = false;
 }
 
@@ -639,7 +690,7 @@ int NativeMusicUi::selectedGlobalIndex() const {
 }
 
 int NativeMusicUi::globalIndexForRow(int row) const {
-    const int visible = mPage * RowsPerPage + row;
+    const int visible = row;   // absolute row in the filtered list
     return visible >= 0 && visible < mVisibleCount
         ? mVisibleIndices[visible] : -1;
 }
@@ -668,95 +719,62 @@ void NativeMusicUi::ensureSourceVisible() {
     if (mSourceOffset < 0) mSourceOffset = 0;
 }
 
+
+// Player-strip control centres (panel base units) and radii.
+static constexpr float ControlCenterX[5] = {318.0f, 360.0f, 412.0f, 464.0f, 506.0f};
+static constexpr float ControlRadius[5] = {15.0f, 16.0f, 21.0f, 16.0f, 15.0f};
+static constexpr float ControlCenterY = PlayerY + 27.0f;
+
 int NativeMusicUi::classifyControl(float x, float y, float panelX,
                                    float panelY, float panelW, float panelH,
                                    float scale) const {
-    const float sidebarX = panelX + 8.0f * scale;
-    const float sidebarY = panelY + 8.0f * scale;
-    const float sidebarW = 230.0f * scale;
-    const float mainX = panelX + 246.0f * scale;
-    const float mainY = panelY + 8.0f * scale;
-    const float mainW = panelW - 254.0f * scale;
-    const float bottomY = panelY + 656.0f * scale;
-
-    if (hit(x, y, sidebarX + 12.0f * scale,
-            sidebarY + 70.0f * scale,
-            sidebarW - 24.0f * scale, 44.0f * scale))
-        return ControlAllSource;
-
-    const float sourceY = sidebarY + 154.0f * scale;
-    for (int slot = 0; slot < VisibleSources; ++slot) {
-        const int sourceIndex = mSourceOffset + slot;
-        if (!mLibrary || sourceIndex >= mLibrary->sourceCount()) break;
-        if (hit(x, y, sidebarX + 12.0f * scale,
-                sourceY + slot * 52.0f * scale,
-                sidebarW - 24.0f * scale, 46.0f * scale))
-            return ControlSourceBase + slot;
-    }
-    if (hit(x, y, sidebarX + 12.0f * scale,
-            sidebarY + 580.0f * scale, 94.0f * scale, 38.0f * scale))
-        return ControlSourcePrev;
-    if (hit(x, y, sidebarX + 124.0f * scale,
-            sidebarY + 580.0f * scale, 94.0f * scale, 38.0f * scale))
-        return ControlSourceNext;
-
-    const float searchX = mainX + 20.0f * scale;
-    const float searchY = mainY + 82.0f * scale;
-    const float searchW = mainW - 214.0f * scale;
+    (void)panelW; (void)panelH;
+    const float rowY = panelY + SearchRowY * scale;
+    const float rowH = SearchRowH * scale;
+    const float searchX = panelX + 14.0f * scale;
+    const float searchW = 258.0f * scale;
     if (mSearchText[0] &&
-        hit(x, y, searchX + searchW - 42.0f * scale, searchY,
-            42.0f * scale, 44.0f * scale))
+        hit(x, y, searchX + searchW - 40.0f * scale, rowY,
+            40.0f * scale, rowH))
         return ControlClearSearch;
-    if (hit(x, y, searchX, searchY, searchW, 44.0f * scale))
-        return ControlSearch;
-    if (hit(x, y, mainX + mainW - 176.0f * scale, searchY,
-            156.0f * scale, 44.0f * scale))
+    if (hit(x, y, searchX, rowY, searchW, rowH)) return ControlSearch;
+    if (hit(x, y, panelX + 280.0f * scale, rowY, 140.0f * scale, rowH))
+        return ControlSourceCycle;
+    if (hit(x, y, panelX + 428.0f * scale, rowY, 118.0f * scale, rowH))
         return ControlSort;
 
-    const float listX = mainX + 20.0f * scale;
-    const float listY = mainY + 170.0f * scale;
-    const float rowW = mainW - 40.0f * scale;
-    for (int row = 0; row < RowsPerPage; ++row) {
-        if (hit(x, y, listX,
-                listY + row * 56.0f * scale,
-                rowW, 52.0f * scale))
-            return ControlRowBase + row;
+    const float listX = panelX + ListX * scale;
+    const float listY = panelY + ListY * scale;
+    const float listW = ListW * scale;
+    const float listH = ListH * scale;
+    if (hit(x, y, listX, listY, listW, listH)) {
+        const float rel = (y - listY) / scale + mScrollPx;
+        const int index = static_cast<int>(rel / RowPitch);
+        const float within = rel - static_cast<float>(index) * RowPitch;
+        if (rel >= 0.0f && index >= 0 && index < mVisibleCount &&
+            within <= RowHeight &&
+            x <= listX + (ListW - ScrollBarGutter) * scale)
+            return ControlRowBase + index;
+        return ControlListArea;
     }
 
-    const float footerY = mainY + 590.0f * scale;
-    if (hit(x, y, mainX + 20.0f * scale, footerY,
-            102.0f * scale, 36.0f * scale)) return ControlRescan;
-    if (hit(x, y, mainX + mainW - 174.0f * scale, footerY,
-            72.0f * scale, 36.0f * scale)) return ControlPagePrev;
-    if (hit(x, y, mainX + mainW - 92.0f * scale, footerY,
-            72.0f * scale, 36.0f * scale)) return ControlPageNext;
-
-
-    const float centerX = panelX + panelW * 0.5f;
-    const float controlsY = bottomY + 32.0f * scale;
-    const float offsets[] = {-122.0f, -62.0f, 0.0f, 62.0f, 122.0f, 178.0f};
-    const int ids[] = {ControlShuffle, ControlTrackPrev, ControlPlayPause,
-                       ControlTrackNext, ControlLoop, ControlStop};
-    const float radii[] = {22.0f, 22.0f, 30.0f, 22.0f, 22.0f, 20.0f};
-    for (int i = 0; i < 6; ++i) {
-        if (hit(x, y,
-                centerX + (offsets[i] - radii[i]) * scale,
-                controlsY - radii[i] * scale,
-                radii[i] * 2.0f * scale,
-                radii[i] * 2.0f * scale)) return ids[i];
+    static const int ids[5] = {ControlShuffle, ControlTrackPrev,
+                               ControlPlayPause, ControlTrackNext,
+                               ControlLoop};
+    for (int i = 0; i < 5; ++i) {
+        const float r = ControlRadius[i] + 5.0f;
+        if (hit(x, y, panelX + (ControlCenterX[i] - r) * scale,
+                panelY + (ControlCenterY - r) * scale,
+                r * 2.0f * scale, r * 2.0f * scale)) return ids[i];
     }
 
-    if (hit(x, y, centerX - 250.0f * scale,
-            bottomY + 64.0f * scale,
-            500.0f * scale, 28.0f * scale)) return ControlSeek;
-
-    const float right = panelX + panelW - 16.0f * scale;
-    if (hit(x, y, right - 224.0f * scale,
-            bottomY + 44.0f * scale,
-            30.0f * scale, 30.0f * scale)) return ControlMute;
-    if (hit(x, y, right - 186.0f * scale,
-            bottomY + 45.0f * scale,
-            170.0f * scale, 28.0f * scale)) return ControlVolumeBar;
+    const float barY = panelY + (PlayerY + 62.0f) * scale;
+    if (hit(x, y, panelX + (SeekX - 8.0f) * scale, barY - 12.0f * scale,
+            (SeekW + 16.0f) * scale, 26.0f * scale)) return ControlSeek;
+    if (hit(x, y, panelX + 362.0f * scale, barY - 12.0f * scale,
+            28.0f * scale, 26.0f * scale)) return ControlMute;
+    if (hit(x, y, panelX + (VolX - 6.0f) * scale, barY - 12.0f * scale,
+            (VolW + 12.0f) * scale, 26.0f * scale)) return ControlVolumeBar;
     return 0;
 }
 
@@ -764,9 +782,8 @@ void NativeMusicUi::seekFromPointer(float x, float panelX, float panelY,
                                     float scale) {
     (void)panelY;
     if (!mPlayer || !mPlayer->hasMedia()) return;
-    const float begin = panelX + BasePanelWidth * 0.5f * scale -
-                        250.0f * scale;
-    const float width = 500.0f * scale;
+    const float begin = panelX + SeekX * scale;
+    const float width = SeekW * scale;
     const float fraction = clampFloat((x - begin) / width, 0.0f, 1.0f);
     const int duration = mPlayer->durationMs();
     if (duration > 0)
@@ -776,14 +793,73 @@ void NativeMusicUi::seekFromPointer(float x, float panelX, float panelY,
 void NativeMusicUi::volumeFromPointer(float x, float panelX, float panelY,
                                       float scale) {
     (void)panelY;
-    const float right = panelX + BasePanelWidth * scale - 16.0f * scale;
-    const float begin = right - 186.0f * scale;
-    const float width = 170.0f * scale;
+    const float begin = panelX + VolX * scale;
+    const float width = VolW * scale;
     const float fraction = clampFloat((x - begin) / width, 0.0f, 1.0f);
     const int percent = static_cast<int>(fraction * 100.0f + 0.5f);
     if (percent > 0) mVolumeBeforeMute = percent;
     mConfig->setVolumePercent(percent);
     mPlayer->setVolume(fraction);
+}
+
+float NativeMusicUi::maxScroll() const {
+    const float content = static_cast<float>(mVisibleCount) * RowPitch;
+    return maxFloat(0.0f, content - ListH);
+}
+
+void NativeMusicUi::clampScroll() {
+    if (mVisibleCount <= 0) return;   // keep the restored position until a scan lands
+    mScrollPx = clampFloat(mScrollPx, 0.0f, maxScroll());
+    syncPageFromScroll();
+}
+
+void NativeMusicUi::syncPageFromScroll() {
+    mPage = static_cast<int>(mScrollPx / RowPitch + 0.5f);
+    if (mPage < 0) mPage = 0;
+}
+
+void NativeMusicUi::scrollToVisibleIndex(int visibleIndex) {
+    if (visibleIndex < 0) return;
+    const float top = static_cast<float>(visibleIndex) * RowPitch;
+    if (top < mScrollPx) mScrollPx = top;
+    else if (top + RowHeight > mScrollPx + ListH)
+        mScrollPx = top + RowHeight - ListH;
+    mFlingVel = 0.0f;
+    clampScroll();
+}
+
+void NativeMusicUi::stepFling() {
+    if (mFlingVel == 0.0f || !mOpen) {
+        mFlingVel = 0.0f;
+        return;
+    }
+    mScrollPx += mFlingVel;
+    const float limit = maxScroll();
+    if (mScrollPx <= 0.0f) { mScrollPx = 0.0f; mFlingVel = 0.0f; }
+    else if (mScrollPx >= limit) { mScrollPx = limit; mFlingVel = 0.0f; }
+    mFlingVel *= 0.93f;
+    if (mFlingVel > -0.35f && mFlingVel < 0.35f) mFlingVel = 0.0f;
+    if (mFlingVel == 0.0f) syncPageFromScroll();
+    renderUnlocked();
+}
+
+void NativeMusicUi::addRaised(float x, float y, float w, float h,
+                              float radius, float scale, u32 face,
+                              u32 darkEdge, u32 lightEdge) {
+    addRect(x + 2.0f * scale, y + 3.0f * scale, w, h, darkEdge, radius);
+    addRect(x - 1.5f * scale, y - 1.5f * scale, w, h, lightEdge, radius);
+    addRect(x, y, w, h, face, radius);
+}
+
+void NativeMusicUi::addInset(float x, float y, float w, float h,
+                             float radius, float scale, u32 face,
+                             u32 darkEdge, u32 lightEdge) {
+    addRect(x, y, w, h, face, radius);
+    const float inner = maxFloat(radius * 0.8f, 2.0f * scale);
+    addRect(x + inner, y + 1.0f * scale, w - inner * 2.0f, 1.6f * scale,
+            darkEdge, 0.8f * scale);
+    addRect(x + inner, y + h - 2.0f * scale, w - inner * 2.0f, 1.0f * scale,
+            lightEdge, 0.5f * scale);
 }
 
 int NativeMusicUi::randomVisibleIndex(int count, int current) {
@@ -840,7 +916,7 @@ void NativeMusicUi::selectTrackInternal(int globalIndex, bool autoplay,
         }
     }
     const int visible = visibleIndexOfGlobal(globalIndex);
-    if (visible >= 0) mPage = visible / RowsPerPage;
+    if (visible >= 0) scrollToVisibleIndex(visible);
     if (renderAfter) renderUnlocked();
 }
 
@@ -927,7 +1003,7 @@ void NativeMusicUi::setSearchActive(bool active) {
 
 void NativeMusicUi::clearSearch() {
     mSearchText[0] = 0;
-    mPage = 0;
+    mScrollPx = 0.0f; mFlingVel = 0.0f; mPage = 0;
     markFilterDirty();
     rebuildVisibleIndex();
 }
@@ -940,7 +1016,7 @@ void NativeMusicUi::eraseLastSearchGlyph() {
            (static_cast<u8>(mSearchText[length]) & 0xC0u) == 0x80u)
         --length;
     mSearchText[length] = 0;
-    mPage = 0;
+    mScrollPx = 0.0f; mFlingVel = 0.0f; mPage = 0;
     markFilterDirty();
     rebuildVisibleIndex();
 }
@@ -955,7 +1031,7 @@ void NativeMusicUi::appendSearchText(const char* text, usize size) {
         mSearchText[at++] = static_cast<char>(value);
     }
     mSearchText[at] = 0;
-    mPage = 0;
+    mScrollPx = 0.0f; mFlingVel = 0.0f; mPage = 0;
     markFilterDirty();
     rebuildVisibleIndex();
 }
@@ -988,12 +1064,7 @@ void NativeMusicUi::activateControl(int control) {
         refreshUnlocked();
         return;
     }
-    if (control == ControlPagePrev) {
-        if (mPage > 0) --mPage;
-    } else if (control == ControlPageNext) {
-        const int pages = (mVisibleCount + RowsPerPage - 1) / RowsPerPage;
-        if (mPage + 1 < pages) ++mPage;
-    } else if (control == ControlTrackPrev) {
+    if (control == ControlTrackPrev) {
         advanceTrack(-1, false);
     } else if (control == ControlTrackNext) {
         advanceTrack(1, false);
@@ -1029,14 +1100,14 @@ void NativeMusicUi::activateControl(int control) {
         mCompletionIdleFrames = 0;
         mLastPlaybackPositionMs = 0;
         mLastPlaybackDurationMs = 0;
-    } else if (control == ControlSearch) {    } else if (control == ControlSearch) {
+    } else if (control == ControlSearch) {
         setSearchActive(true);
     } else if (control == ControlClearSearch) {
         clearSearch();
         setSearchActive(true);
     } else if (control == ControlSort) {
         mSortMode = (mSortMode + 1) % 3;
-        mPage = 0;
+        mScrollPx = 0.0f; mFlingVel = 0.0f; mPage = 0;
         markFilterDirty();
         rebuildVisibleIndex();
     } else if (control == ControlMute) {
@@ -1051,32 +1122,20 @@ void NativeMusicUi::activateControl(int control) {
             mConfig->setVolumePercent(restored);
             mPlayer->setVolume(restored / 100.0f);
         }
-    } else if (control == ControlAllSource) {
-        mActiveTab = 0;
-        mPage = 0;
+    } else if (control == ControlSourceCycle || control == ControlAllSource) {
+        // The source chip cycles: All music -> folder 1 -> folder 2 -> ...
+        const int total = mLibrary ? mLibrary->sourceCount() + 1 : 1;
+        mActiveTab = control == ControlAllSource
+            ? 0 : (mActiveTab + 1) % (total > 0 ? total : 1);
+        mScrollPx = 0.0f; mFlingVel = 0.0f; mPage = 0;
         markFilterDirty();
         rebuildVisibleIndex();
-    } else if (control == ControlSourcePrev) {
-        if (mSourceOffset > 0) --mSourceOffset;
-    } else if (control == ControlSourceNext) {
-        const int maxOffset = mLibrary->sourceCount() > VisibleSources
-            ? mLibrary->sourceCount() - VisibleSources : 0;
-        if (mSourceOffset < maxOffset) ++mSourceOffset;
-    } else if (control >= ControlSourceBase &&
-               control < ControlSourceBase + VisibleSources) {
-        const int sourceIndex = mSourceOffset +
-                                (control - ControlSourceBase);
-        if (sourceIndex < mLibrary->sourceCount()) {
-                mActiveTab = sourceIndex + 1;
-            mPage = 0;
-            markFilterDirty();
-            rebuildVisibleIndex();
-            ensureSourceVisible();
-        }
-    } else if (control >= ControlRowBase &&
-               control < ControlRowBase + RowsPerPage) {
-        selectTrackInternal(globalIndexForRow(control - ControlRowBase),
-                            true, false, currentSourceFilter());
+        ensureSourceVisible();
+    } else if (control >= ControlRowBase) {
+        const int visible = control - ControlRowBase;
+        if (visible >= 0 && visible < mVisibleCount)
+            selectTrackInternal(mVisibleIndices[visible],
+                                true, false, currentSourceFilter());
     }
     // Navigation/panel state is auto-saved alongside config changes. Seek and
     // volume drags use their dedicated setters and avoid extra disk writes.
@@ -1094,13 +1153,29 @@ bool NativeMusicUi::onTouch(const leviabi::TouchEvent& event) {
 
     if (event.action == 0 || event.action == 5) {
         if (!inside) return false;
+        mFlingVel = 0.0f;   // a touch stops momentum scrolling
         mPressedControl = classifyControl(event.x, event.y, panelX,
                                           panelY, panelW, panelH, scale);
+        if (mPressedControl >= ControlRowBase ||
+            mPressedControl == ControlListArea) {
+            // Possible tap or scroll: decide once the finger moves.
+            mScrollTouching = true;
+            mScrolling = false;
+            mScrollPointerId = event.pointerId;
+            mTouchStartY = event.y;
+            mLastTouchY = event.y;
+            mLastTouchMs = monotonicMs();
+            mScrollVelPerMs = 0.0f;
+            mScrollStartPx = mScrollPx;
+            if (mPressedControl == ControlListArea) mPressedControl = 0;
+            renderUnlocked();
+            return true;
+        }
         if (mPressedControl != 0) {
             renderUnlocked();
             return true;
         }
-        const bool dragRegion = event.y <= panelY + 72.0f * scale;
+        const bool dragRegion = event.y <= panelY + HeaderH * scale;
         if (dragRegion) {
             mDragging = true;
             mDragPointerId = event.pointerId;
@@ -1116,6 +1191,29 @@ bool NativeMusicUi::onTouch(const leviabi::TouchEvent& event) {
             mPanelY = event.y - mDragOffsetY;
             calculateLayout(panelX, panelY, panelW, panelH, scale);
             renderUnlocked();
+            return true;
+        }
+        if (mScrollTouching && event.pointerId == mScrollPointerId) {
+            const float dy = event.y - mTouchStartY;
+            if (!mScrolling && (dy > 10.0f * scale || dy < -10.0f * scale)) {
+                mScrolling = true;
+                mPressedControl = 0;   // it is a scroll, not a tap
+            }
+            if (mScrolling) {
+                const long long now = monotonicMs();
+                const float dt = static_cast<float>(now - mLastTouchMs);
+                if (dt >= 1.0f) {
+                    const float instant =
+                        -(event.y - mLastTouchY) / scale / dt;
+                    mScrollVelPerMs = 0.7f * mScrollVelPerMs +
+                                      0.3f * instant;
+                    mLastTouchMs = now;
+                    mLastTouchY = event.y;
+                }
+                mScrollPx = clampFloat(mScrollStartPx - dy / scale,
+                                       0.0f, maxScroll());
+                renderUnlocked();
+            }
             return true;
         }
         if (mPressedControl == ControlSeek) {
@@ -1138,6 +1236,23 @@ bool NativeMusicUi::onTouch(const leviabi::TouchEvent& event) {
             savePanelUiState();
             renderUnlocked();
             return true;
+        }
+        if (mScrollTouching && event.pointerId == mScrollPointerId) {
+            mScrollTouching = false;
+            mScrollPointerId = -1;
+            if (mScrolling) {
+                mScrolling = false;
+                mPressedControl = 0;
+                const long long idle = monotonicMs() - mLastTouchMs;
+                float fling = idle > 90 ? 0.0f : mScrollVelPerMs * 16.0f;
+                if (fling > 60.0f) fling = 60.0f;
+                if (fling < -60.0f) fling = -60.0f;
+                mFlingVel = (fling > -2.0f && fling < 2.0f) ? 0.0f : fling;
+                syncPageFromScroll();
+                if (mFlingVel == 0.0f) savePanelUiState();
+                renderUnlocked();
+                return true;
+            }
         }
         const int pressed = mPressedControl;
         const int released = classifyControl(event.x, event.y, panelX,
@@ -1165,6 +1280,9 @@ bool NativeMusicUi::onTouch(const leviabi::TouchEvent& event) {
         mDragging = false;
         mDragPointerId = -1;
         mPressedControl = 0;
+        mScrollTouching = false;
+        mScrolling = false;
+        mScrollPointerId = -1;
         savePanelUiState();
         renderUnlocked();
         return true;
@@ -1229,9 +1347,7 @@ void NativeMusicUi::applyScannedLibrary() {
     ensureSourceVisible();
     markFilterDirty();
     rebuildVisibleIndex();
-    const int pages = (mVisibleCount + RowsPerPage - 1) / RowsPerPage;
-    if (pages <= 0) mPage = 0;
-    else if (mPage >= pages) mPage = pages - 1;
+    clampScroll();
 }
 
 void NativeMusicUi::rescanLibraryPreservingState() {
@@ -1307,7 +1423,10 @@ void NativeMusicUi::redraw() {
 void NativeMusicUi::tickPlaybackUnlocked() {
     mPlayer->snapshot(mSnapshot);
     const bool uiOpen = __atomic_load_n(&mOpen, __ATOMIC_ACQUIRE) != 0;
-    if (uiOpen) mPlayer->captureSpectrum(mSpectrum, 24);
+    // The visualizer is polled over JNI, so only do it at the redraw rate
+    // while something is actually playing.
+    if (uiOpen && mSnapshot.playing && (mAnimationFrame % 3) == 0)
+        mPlayer->captureSpectrum(mSpectrum, 24);
 
     if (mSnapshot.playing) {
         mPlaybackWasRunning = true;
@@ -1723,12 +1842,12 @@ void NativeMusicUi::drawLoopIcon(float x, float y, float s,
                         8 * s, "1", color);
 }
 
-void NativeMusicUi::drawSearchIcon(float x, float y, float s, u32 color) {
-    addCircle(x - 2 * s, y - 2 * s, 7 * s, 0x00000000u);
+void NativeMusicUi::drawSearchIcon(float x, float y, float s, u32 color,
+                                   u32 hole) {
     addLine(x + 3 * s, y + 3 * s, x + 10 * s, y + 10 * s,
             2 * s, color);
     addCircle(x - 2 * s, y - 2 * s, 7 * s, color);
-    addCircle(x - 2 * s, y - 2 * s, 4.5f * s, 0xFF242424u);
+    addCircle(x - 2 * s, y - 2 * s, 4.5f * s, hole);
 }
 
 void NativeMusicUi::drawCloseIcon(float x, float y, float s, u32 color) {
@@ -1767,290 +1886,228 @@ void NativeMusicUi::renderUnlocked() {
     }
     if (mFilterDirty) rebuildVisibleIndex();
 
-    float panelX{}, panelY{}, panelW{}, panelH{}, scale{};
-    calculateLayout(panelX, panelY, panelW, panelH, scale);
+    float panelX{}, panelY{}, panelW{}, panelH{}, s{};
+    calculateLayout(panelX, panelY, panelW, panelH, s);
     ensureSourceVisible();
+    clampScroll();
 
-    const bool darkTheme = useDarkTheme();
-    const u32 black = darkTheme ? 0xFA000000u : 0xFFF1F1F1u;
-    const u32 sidebar = darkTheme ? 0xFC121212u : 0xFFFFFFFFu;
-    const u32 mainSurface = darkTheme ? 0xFC181818u : 0xFFF8F8F8u;
-    const u32 playerSurface = darkTheme ? 0xFC181818u : 0xFFFFFFFFu;
-    const u32 elevated = darkTheme ? 0xFF242424u : 0xFFE9E9E9u;
-    const u32 hover = darkTheme ? 0xFF2A2A2Au : 0xFFDEDEDEu;
-    const u32 selectedSurface = darkTheme ? 0xFF303030u : 0xFFD5D5D5u;
-    const u32 green = 0xFF1DB954u;
-    const u32 greenBright = darkTheme ? 0xFF1ED760u : 0xFF11883Du;
-    const u32 white = darkTheme ? 0xFFFFFFFFu : 0xFF111111u;
-    const u32 softWhite = darkTheme ? 0xFFE7E7E7u : 0xFF242424u;
-    const u32 muted = darkTheme ? 0xFFB3B3B3u : 0xFF5E5E5Eu;
-    const u32 dim = darkTheme ? 0xFF787878u : 0xFF777777u;
-    const u32 divider = darkTheme ? 0xFF353535u : 0xFFD0D0D0u;
-    const u32 danger = 0xFFFF5A5Fu;
+    // --- palette (LeviVC-style soft dark surfaces, mint accent) -----------
+    const bool dark = useDarkTheme();
+    const u32 cardC     = dark ? 0xFA1B1E25u : 0xFAE9ECF2u;
+    const u32 raisedC   = dark ? 0xFF21252Du : 0xFFF3F5F9u;
+    const u32 insetC    = dark ? 0xFF15181Eu : 0xFFDCE0E8u;
+    const u32 selC      = dark ? 0xFF272C36u : 0xFFFFFFFFu;
+    const u32 hoverC    = dark ? 0xFF20242Cu : 0xFFE0E4EBu;
+    const u32 textC     = dark ? 0xFFF2F4F8u : 0xFF1B1E25u;
+    const u32 softC     = dark ? 0xFFD5D9E2u : 0xFF2B303Au;
+    const u32 mutedC    = dark ? 0xFF8B92A3u : 0xFF5B6272u;
+    const u32 dimC      = dark ? 0xFF5B6272u : 0xFF8B92A3u;
+    const u32 accent    = dark ? 0xFF52E3A4u : 0xFF12A56Eu;
+    const u32 accentDn  = dark ? 0xFF3FC48Cu : 0xFF0E8A5Cu;
+    const u32 onAccent  = dark ? 0xFF08261Au : 0xFFFFFFFFu;
+    const u32 amber     = dark ? 0xFFF2B84Au : 0xFFC98A12u;
+    const u32 edgeDark  = dark ? 0x99050709u : 0x33000000u;
+    const u32 edgeLight = dark ? 0x12FFFFFFu : 0xAAFFFFFFu;
+    const u32 accentSoft = (accent & 0x00FFFFFFu) | 0x30000000u;
 
-    const float titleFont = maxFloat(14.0f, 24.0f * scale);
-    const float sectionFont = maxFloat(11.0f, 17.0f * scale);
-    const float bodyFont = maxFloat(9.0f, 14.0f * scale);
-    const float smallFont = maxFloat(8.0f, 11.0f * scale);
+    const float titleFont = maxFloat(14.0f, 22.0f * s);
+    const float bodyFont  = maxFloat(10.0f, 14.0f * s);
+    const float smallFont = maxFloat(9.0f, 11.0f * s);
 
-    addRect(panelX + 10 * scale, panelY + 12 * scale,
-            panelW, panelH, 0x66000000u, 22 * scale);
-    addRect(panelX, panelY, panelW, panelH, black, 20 * scale);
-
-    const float sidebarX = panelX + 8 * scale;
-    const float sidebarY = panelY + 8 * scale;
-    const float sidebarW = 230 * scale;
-    const float sidebarH = 640 * scale;
-    const float mainX = panelX + 246 * scale;
-    const float mainY = panelY + 8 * scale;
-    const float mainW = panelW - 254 * scale;
-    const float mainH = 640 * scale;
-    const float bottomX = panelX + 8 * scale;
-    const float bottomY = panelY + 656 * scale;
-    const float bottomW = panelW - 16 * scale;
-    const float bottomH = 96 * scale;
-
-    addRect(sidebarX, sidebarY, sidebarW, sidebarH,
-            sidebar, 16 * scale);
-    addRect(mainX, mainY, mainW, mainH,
-            mainSurface, 16 * scale);
-    addRect(bottomX, bottomY, bottomW, bottomH,
-            playerSurface, 14 * scale);
-
-    addCircle(sidebarX + 30 * scale, sidebarY + 30 * scale,
-              18 * scale, green);
-    addLine(sidebarX + 20 * scale, sidebarY + 28 * scale,
-            sidebarX + 40 * scale, sidebarY + 28 * scale,
-            3 * scale, 0xFF06240Fu);
-    addLine(sidebarX + 23 * scale, sidebarY + 35 * scale,
-            sidebarX + 37 * scale, sidebarY + 35 * scale,
-            3 * scale, 0xFF06240Fu);
-    addText(sidebarX + 58 * scale, sidebarY + 15 * scale,
-            sectionFont, "LeviMusic", white);
-    addText(sidebarX + 58 * scale, sidebarY + 37 * scale,
-            smallFont, "LOCAL PLAYER", muted);
-
-    const bool allActive = mActiveTab == 0;
-    addRect(sidebarX + 12 * scale, sidebarY + 70 * scale,
-            sidebarW - 24 * scale, 44 * scale,
-            allActive ? selectedSurface : sidebar, 8 * scale);
-    addCircle(sidebarX + 31 * scale, sidebarY + 92 * scale,
-              8 * scale, allActive ? green : muted);
-    addCircle(sidebarX + 31 * scale, sidebarY + 92 * scale,
-              3 * scale, sidebar);
-    addText(sidebarX + 50 * scale, sidebarY + 82 * scale,
-            bodyFont, "All Music", allActive ? white : softWhite);
-
-    addText(sidebarX + 16 * scale, sidebarY + 128 * scale,
-            smallFont, "YOUR LIBRARY", muted);
-    const float sourceY = sidebarY + 154 * scale;
-    for (int slot = 0; slot < VisibleSources; ++slot) {
-        const int sourceIndex = mSourceOffset + slot;
-        const MusicSource* source = mLibrary->source(sourceIndex);
-        if (!source) break;
-        const float y = sourceY + slot * 52 * scale;
-        const bool active = mActiveTab == sourceIndex + 1;
-        const bool pressed = mPressedControl == ControlSourceBase + slot;
-        addRect(sidebarX + 12 * scale, y,
-                sidebarW - 24 * scale, 46 * scale,
-                pressed ? hover : (active ? selectedSurface : sidebar),
-                8 * scale);
-        addRect(sidebarX + 20 * scale, y + 8 * scale,
-                30 * scale, 30 * scale,
-                active ? green : elevated, 6 * scale);
-        addLine(sidebarX + 27 * scale, y + 17 * scale,
-                sidebarX + 43 * scale, y + 17 * scale,
-                2 * scale, active ? 0xFF06240Fu : muted);
-        addLine(sidebarX + 27 * scale, y + 24 * scale,
-                sidebarX + 39 * scale, y + 24 * scale,
-                2 * scale, active ? 0xFF06240Fu : muted);
-        addTextFlow(sidebarX + 60 * scale, y + 8 * scale,
-                    bodyFont, source->label,
-                    sidebarW - 82 * scale,
-                    active ? white : softWhite);
-        char sourceCount[16]{};
-        snprintf(sourceCount, sizeof(sourceCount), "%d songs",
-                 source->trackCount);
-        addText(sidebarX + 60 * scale, y + 27 * scale,
-                smallFont, sourceCount, muted);
-    }
-
-    addRect(sidebarX + 12 * scale, sidebarY + 580 * scale,
-            94 * scale, 38 * scale, elevated, 10 * scale);
-    addRect(sidebarX + 124 * scale, sidebarY + 580 * scale,
-            94 * scale, 38 * scale, elevated, 10 * scale);
-    addTextCentered(sidebarX + 12 * scale, sidebarY + 580 * scale,
-                    94 * scale, 38 * scale, smallFont, "PREVIOUS", muted);
-    addTextCentered(sidebarX + 124 * scale, sidebarY + 580 * scale,
-                    94 * scale, 38 * scale, smallFont, "NEXT", muted);
-
-    const char* activeLabel = "All Music";
-    const char* activePath = "Every configured music directory";
-    if (mActiveTab > 0) {
-        const MusicSource* source = mLibrary->source(mActiveTab - 1);
-        if (source) {
-            activeLabel = source->label;
-            activePath = source->path;
-        }
-    }
-    addText(mainX + 22 * scale, mainY + 18 * scale,
-            titleFont, "Your Library", white);
-    addTextFlow(mainX + 22 * scale, mainY + 51 * scale,
-                smallFont, activePath, mainW - 220 * scale, muted);
-    char trackCountText[32]{};
-    snprintf(trackCountText, sizeof(trackCountText), "%d songs",
-             mVisibleCount);
-    addTextRight(mainX + mainW - 22 * scale, mainY + 24 * scale,
-                 bodyFont, trackCountText, muted);
-
+    const bool playing = mSnapshot.playing;
     const int selected = selectedGlobalIndex();
-    const float searchX = mainX + 20 * scale;
-    const float searchY = mainY + 82 * scale;
-    const float searchW = mainW - 214 * scale;
-    const bool searchPressed = mPressedControl == ControlSearch;
-    addRect(searchX, searchY, searchW, 44 * scale,
-            searchPressed || mSearchActive ? selectedSurface : elevated,
-            22 * scale);
-    drawSearchIcon(searchX + 24 * scale, searchY + 22 * scale,
-                   0.75f * scale, muted);
-    if (mSearchText[0]) {
-        addTextFlow(searchX + 48 * scale, searchY + 12 * scale,
-                    bodyFont, mSearchText, searchW - 92 * scale, white);
-        drawCloseIcon(searchX + searchW - 22 * scale,
-                      searchY + 22 * scale, 0.75f * scale, muted);
-    } else {
-        addText(searchX + 48 * scale, searchY + 12 * scale, bodyFont,
-                "Search songs, artists", muted);
+
+    // --- card -------------------------------------------------------------
+    addRect(panelX + 3 * s, panelY + 7 * s, panelW, panelH,
+            dark ? 0x55000000u : 0x33000000u, 24 * s);
+    addRect(panelX, panelY, panelW, panelH, cardC, 22 * s);
+    addRect(panelX + 24 * s, panelY + 1 * s, panelW - 48 * s, 1 * s,
+            edgeLight, 0.5f * s);
+
+    // --- header -----------------------------------------------------------
+    addRect(panelX + 14 * s, panelY + 15 * s, 30 * s, 30 * s, accent, 9 * s);
+    static constexpr float idleBars[3] = {7.0f, 13.0f, 9.0f};
+    for (int bar = 0; bar < 3; ++bar) {
+        const float level = clampFloat(mSpectrum[bar], 0.0f, 1.0f);
+        const float height = playing ? 6.0f + level * 14.0f : idleBars[bar];
+        addRect(panelX + (22 + bar * 6.5f) * s,
+                panelY + (38 - height) * s, 4 * s, height * s,
+                onAccent, 1.5f * s);
     }
-    if (mSearchActive && ((mAnimationFrame / 8) & 1) == 0)
-        addRect(searchX + 18 * scale,
-                searchY + 41 * scale, searchW - 36 * scale,
-                2 * scale, green, 1 * scale);
+    addText(panelX + 54 * s, panelY + 10 * s, titleFont, "LeviMusic", textC);
+    addText(panelX + 54 * s, panelY + 38 * s, smallFont, "LOCAL PLAYER", mutedC);
 
-    const float sortX = mainX + mainW - 176 * scale;
-    addRect(sortX, searchY, 156 * scale, 44 * scale,
-            mPressedControl == ControlSort ? hover : elevated,
-            22 * scale);
-    drawSortIcon(sortX + 24 * scale, searchY + 22 * scale,
-                 0.7f * scale, muted);
-    const char* sortText = mSortMode == 0 ? "Custom order" :
-                           (mSortMode == 1 ? "Title A-Z" : "Artist A-Z");
-    addText(sortX + 44 * scale, searchY + 12 * scale,
-            bodyFont, sortText, softWhite);
+    {
+        const float chipW = 104 * s, chipH = 28 * s;
+        const float chipX = panelX + panelW - 14 * s - chipW;
+        const float chipY = panelY + 16 * s;
+        const char* status = "Idle";
+        u32 statusColor = mutedC;
+        u32 dotColor = dimC;
+        if (playing) { status = "Playing"; statusColor = accent; dotColor = accent; }
+        else if (mSnapshot.hasMedia) { status = "Paused"; statusColor = amber; dotColor = amber; }
+        addInset(chipX, chipY, chipW, chipH, 14 * s, s,
+                 insetC, edgeDark, edgeLight);
+        addCircle(chipX + 17 * s, chipY + 14 * s, 4 * s, dotColor);
+        addTextCentered(chipX + 26 * s, chipY, chipW - 32 * s, chipH,
+                        smallFont + 1 * s, status, statusColor);
+    }
 
-    const float listX = mainX + 20 * scale;
-    const float listY = mainY + 170 * scale;
-    const float rowW = mainW - 40 * scale;
-    addText(listX + 14 * scale, mainY + 145 * scale,
-            smallFont, "#", dim);
-    addText(listX + 54 * scale, mainY + 145 * scale,
-            smallFont, "TITLE", dim);
-    addText(listX + rowW - 250 * scale, mainY + 145 * scale,
-            smallFont, "FOLDER", dim);
-    addTextRight(listX + rowW - 18 * scale, mainY + 145 * scale,
-                 smallFont, "FORMAT", dim);
-    addLine(listX, mainY + 164 * scale,
-            listX + rowW, mainY + 164 * scale,
-            1 * scale, divider);
+    // --- search / source / sort row ---------------------------------------
+    const float rowY = panelY + SearchRowY * s;
+    const float rowH = SearchRowH * s;
+    {
+        const float searchX = panelX + 14 * s;
+        const float searchW = 258 * s;
+        const bool searchOn = mSearchActive || mPressedControl == ControlSearch;
+        if (searchOn)
+            addRect(searchX - 1.5f * s, rowY - 1.5f * s,
+                    searchW + 3 * s, rowH + 3 * s, accentSoft, 20.5f * s);
+        addInset(searchX, rowY, searchW, rowH, 19 * s, s,
+                 insetC, edgeDark, edgeLight);
+        drawSearchIcon(searchX + 21 * s, rowY + 18 * s, 0.7f * s, mutedC, insetC);
+        const float textX = searchX + 42 * s;
+        float caretX = textX;
+        if (mSearchText[0]) {
+            addTextFlow(textX, rowY + 10 * s, bodyFont, mSearchText,
+                        searchW - 84 * s, textC);
+            caretX += minFloat(estimateTextWidth(mSearchText, bodyFont),
+                               searchW - 84 * s);
+            drawCloseIcon(searchX + searchW - 20 * s, rowY + 19 * s,
+                          0.55f * s, mutedC);
+        } else {
+            addText(textX, rowY + 10 * s, bodyFont,
+                    "Search songs, artists", mutedC);
+        }
+        if (mSearchActive && ((mAnimationFrame / 8) & 1) == 0)
+            addRect(caretX + 1 * s, rowY + 9 * s, 1.5f * s, 20 * s,
+                    accent, 0.75f * s);
 
-    for (int row = 0; row < RowsPerPage; ++row) {
-        const int globalIndex = globalIndexForRow(row);
+        // Source chip: tap to cycle All music -> each folder.
+        const float chipX = panelX + 280 * s;
+        const float chipW = 140 * s;
+        if (mPressedControl == ControlSourceCycle)
+            addInset(chipX, rowY, chipW, rowH, 19 * s, s,
+                     insetC, edgeDark, edgeLight);
+        else
+            addRaised(chipX, rowY, chipW, rowH, 19 * s, s,
+                      raisedC, edgeDark, edgeLight);
+        const char* sourceLabel = "All music";
+        if (mActiveTab > 0) {
+            const MusicSource* source = mLibrary->source(mActiveTab - 1);
+            if (source) sourceLabel = source->label;
+        }
+        addCircle(chipX + 17 * s, rowY + 19 * s, 4 * s,
+                  mActiveTab > 0 ? accent : mutedC);
+        addTextFlow(chipX + 30 * s, rowY + 10 * s, bodyFont, sourceLabel,
+                    chipW - 58 * s, softC);
+        addTriangle(chipX + chipW - 23 * s, rowY + 16 * s,
+                    chipX + chipW - 13 * s, rowY + 16 * s,
+                    chipX + chipW - 18 * s, rowY + 23 * s, mutedC);
+
+        // Sort chip.
+        const float sortX = panelX + 428 * s;
+        const float sortW = 118 * s;
+        if (mPressedControl == ControlSort)
+            addInset(sortX, rowY, sortW, rowH, 19 * s, s,
+                     insetC, edgeDark, edgeLight);
+        else
+            addRaised(sortX, rowY, sortW, rowH, 19 * s, s,
+                      raisedC, edgeDark, edgeLight);
+        drawSortIcon(sortX + 18 * s, rowY + 19 * s, 0.6f * s, mutedC);
+        const char* sortText = mSortMode == 0 ? "Custom" :
+                               (mSortMode == 1 ? "Title A-Z" : "Artist A-Z");
+        addText(sortX + 34 * s, rowY + 10 * s, bodyFont, sortText, softC);
+    }
+
+    // --- scrolling song list ----------------------------------------------
+    const float listX = panelX + ListX * s;
+    const float listY = panelY + ListY * s;
+    const float listW = ListW * s;
+    const float listH = ListH * s;
+    const float rowW = (ListW - ScrollBarGutter) * s;
+    addInset(panelX + 10 * s, listY - 5 * s, panelW - 20 * s, listH + 10 * s,
+             16 * s, s, insetC, edgeDark, edgeLight);
+
+    const float viewTop = listY;
+    const float viewBottom = listY + listH;
+    int firstRow = static_cast<int>(mScrollPx / RowPitch);
+    if (firstRow < 0) firstRow = 0;
+    for (int index = firstRow; index < mVisibleCount; ++index) {
+        const float top = listY + (static_cast<float>(index) * RowPitch -
+                                   mScrollPx) * s;
+        if (top >= viewBottom) break;
+        const float bottom = top + RowHeight * s;
+        if (bottom <= viewTop) continue;
+        const int globalIndex = mVisibleIndices[index];
         MusicTrack* mutableTrack = mLibrary->trackMutable(globalIndex);
         const MusicTrack* track = mutableTrack;
-        if (!track) break;
-        const float y = listY + row * 56 * scale;
+        if (!track) continue;
+        const bool full = top >= viewTop && bottom <= viewBottom;
         const bool selectedRow = globalIndex == selected;
-        const bool pressed = mPressedControl == ControlRowBase + row;
-        if (selectedRow && mutableTrack) mMetadata->ensure(*mutableTrack);
-        addRect(listX, y, rowW, 52 * scale,
-                pressed ? hover : (selectedRow ? selectedSurface : mainSurface),
-                7 * scale);
-        if (selectedRow)
-            addRect(listX, y + 6 * scale, 3 * scale,
-                    40 * scale, green, 2 * scale);
+        const bool pressed = mPressedControl == ControlRowBase + index;
 
-        char number[12]{};
-        snprintf(number, sizeof(number), "%d",
-                 mPage * RowsPerPage + row + 1);
-        if (selectedRow && mSnapshot.playing) {
-            for (int bar = 0; bar < 4; ++bar) {
-                const float height = (5.0f + mSpectrum[bar] * 15.0f) * scale;
-                addRect(listX + (14 + bar * 5) * scale,
-                        y + 38 * scale - height,
-                        3 * scale, height, green, 1 * scale);
+        // Rows that are cut by the list edge only show their background.
+        const float clipTop = maxFloat(top, viewTop);
+        const float clipBottom = minFloat(bottom, viewBottom);
+        if (pressed || selectedRow)
+            addRect(listX, clipTop, rowW, clipBottom - clipTop,
+                    pressed ? hoverC : selC,
+                    minFloat(12 * s, (clipBottom - clipTop) * 0.5f));
+        if (!full) continue;
+        if (selectedRow && mutableTrack) mMetadata->ensure(*mutableTrack);
+
+        if (selectedRow)
+            addRect(listX + 1 * s, top + 10 * s, 3 * s, 24 * s,
+                    accent, 1.5f * s);
+        if (selectedRow && playing) {
+            for (int bar = 0; bar < 3; ++bar) {
+                const float level = clampFloat(mSpectrum[bar], 0.0f, 1.0f);
+                const float height = (5.0f + level * 14.0f) * s;
+                addRect(listX + (14 + bar * 6) * s,
+                        top + 30 * s - height, 3.5f * s, height,
+                        accent, 1.5f * s);
             }
         } else {
-            addTextCentered(listX + 4 * scale, y,
-                            38 * scale, 52 * scale,
-                            smallFont, number, dim);
+            char number[12]{};
+            snprintf(number, sizeof(number), "%d", index + 1);
+            addTextCentered(listX + 4 * s, top, 34 * s, RowHeight * s,
+                            smallFont, number, selectedRow ? accent : dimC);
         }
-
         const char* rowTitle = track->title[0] ? track->title : track->name;
-        addTextFlow(listX + 54 * scale, y + 7 * scale,
-                    bodyFont, rowTitle, rowW - 340 * scale,
-                    selectedRow ? greenBright : white);
-        const char* artist = track->artist[0] ? track->artist : "Unknown artist";
-        addTextFlow(listX + 54 * scale, y + 29 * scale,
-                    smallFont, artist, rowW - 340 * scale, muted);
-        const MusicSource* source = mLibrary->source(track->sourceIndex);
-        if (source)
-            addTextFlow(listX + rowW - 250 * scale,
-                        y + 17 * scale, smallFont,
-                        source->label, 150 * scale, muted);
-        addRect(listX + rowW - 78 * scale, y + 12 * scale,
-                60 * scale, 28 * scale, elevated, 14 * scale);
-        addTextCentered(listX + rowW - 78 * scale, y + 12 * scale,
-                        60 * scale, 28 * scale, smallFont,
-                        track->format, selectedRow ? greenBright : muted);
+        addTextFlow(listX + 46 * s, top + 6 * s, bodyFont, rowTitle,
+                    rowW - 60 * s, selectedRow ? accent : textC);
+        const char* rowArtist = track->artist[0] ? track->artist
+                                                 : "Unknown artist";
+        addTextFlow(listX + 46 * s, top + 25 * s, smallFont, rowArtist,
+                    rowW - 60 * s, mutedC);
     }
 
     if (mVisibleCount == 0) {
-        addCircle(listX + rowW * 0.5f,
-                  listY + 140 * scale, 30 * scale, elevated);
-        drawSearchIcon(listX + rowW * 0.5f,
-                       listY + 140 * scale, 1.2f * scale, muted);
-        addTextCentered(listX, listY + 184 * scale,
-                        rowW, 42 * scale, sectionFont,
+        addTextCentered(listX, listY + 62 * s, listW, 30 * s, bodyFont + 2 * s,
                         mScanRunning ? "Scanning music folders..."
-                                     : (mSearchText[0] ? "No matching songs" : "No audio found"),
-                        softWhite);
-        addTextCentered(listX, listY + 222 * scale,
-                        rowW, 32 * scale, smallFont,
+                                     : (mSearchText[0] ? "No matching songs"
+                                                       : "No audio found"),
+                        softC);
+        addTextCentered(listX, listY + 96 * s, listW, 24 * s, smallFont,
                         mSearchText[0] ? "Try another search"
-                                      : "Use IMPORT to add songs",
-                        muted);
+                                       : "Use IMPORT to add songs",
+                        mutedC);
+    } else if (maxScroll() > 0.5f) {
+        const float content = static_cast<float>(mVisibleCount) * RowPitch;
+        const float thumbH = minFloat(ListH, maxFloat(28.0f,
+                                                      ListH * ListH / content));
+        const float thumbY = (ListH - thumbH) * (mScrollPx / maxScroll());
+        addRect(listX + listW - 6 * s, listY + thumbY * s, 3 * s,
+                thumbH * s, (mScrolling || mFlingVel != 0.0f) ? accent : dimC,
+                1.5f * s);
     }
 
-    const float footerY = mainY + 590 * scale;
-    addRect(mainX + 20 * scale, footerY,
-            102 * scale, 36 * scale, elevated, 18 * scale);
-    addTextCentered(mainX + 20 * scale, footerY,
-                    102 * scale, 36 * scale,
-                    smallFont, "REFRESH", softWhite);
-    addCircle(mainX + 140 * scale, footerY + 18 * scale,
-              4 * scale, green);
-    addText(mainX + 152 * scale, footerY + 10 * scale,
-            smallFont, "LIVE LIBRARY", muted);
-    char resultsText[32]{};
-    snprintf(resultsText, sizeof(resultsText), "%d results", mVisibleCount);
-    addTextCentered(mainX + mainW * 0.5f - 90 * scale,
-                    footerY, 180 * scale, 36 * scale,
-                    smallFont, resultsText, muted);
-    addRect(mainX + mainW - 174 * scale, footerY,
-            72 * scale, 36 * scale, elevated, 18 * scale);
-    addRect(mainX + mainW - 92 * scale, footerY,
-            72 * scale, 36 * scale, elevated, 18 * scale);
-    drawPreviousIcon(mainX + mainW - 138 * scale,
-                     footerY + 18 * scale, 0.65f * scale, muted);
-    drawNextIcon(mainX + mainW - 56 * scale,
-                 footerY + 18 * scale, 0.65f * scale, muted);
-    int pages = (mVisibleCount + RowsPerPage - 1) / RowsPerPage;
-    if (pages <= 0) pages = 1;
-    char pageText[24]{};
-    snprintf(pageText, sizeof(pageText), "%d / %d", mPage + 1, pages);
-    addTextCentered(mainX + mainW - 260 * scale,
-                    footerY, 76 * scale, 36 * scale,
-                    smallFont, pageText, muted);
+    // --- player strip -----------------------------------------------------
+    const float stripX = panelX + PlayerX * s;
+    const float stripY = panelY + PlayerY * s;
+    addRaised(stripX, stripY, PlayerW * s, PlayerH * s, 18 * s, s,
+              raisedC, edgeDark, edgeLight);
 
     const MusicTrack* selectedTrack = mLibrary->track(selected);
     const char* songTitle = selectedTrack
@@ -2063,116 +2120,94 @@ void NativeMusicUi::renderUnlocked() {
         if (mutableTrack) mMetadata->ensure(*mutableTrack);
     }
 
-    const float artX = bottomX + 12 * scale;
-    const float artY = bottomY + 10 * scale;
-    const float artSize = 76 * scale;
+    const float artX = stripX + 10 * s;
+    const float artY = stripY + 9 * s;
+    const float artSize = 44 * s;
     if (selectedTrack && selectedTrack->metadataState == 2 &&
         selectedTrack->artworkId[0]) {
-        addImage(artX, artY, artSize, artSize,
-                 selectedTrack->artworkId, white);
+        addImage(artX, artY, artSize, artSize, selectedTrack->artworkId,
+                 0xFFFFFFFFu);
     } else {
-        const u32 accent = trackAccent(songTitle);
-        addRect(artX, artY, artSize, artSize, accent, 8 * scale);
-        addCircle(artX + 38 * scale, artY + 38 * scale,
-                  24 * scale, darkTheme ? 0xCC101010u : 0xCCFFFFFFu);
-        addCircle(artX + 38 * scale, artY + 38 * scale,
-                  7 * scale, accent);
-        addCircle(artX + 38 * scale, artY + 38 * scale,
-                  3 * scale, darkTheme ? 0xFF101010u : 0xFFFFFFFFu);
+        const u32 tile = trackAccent(songTitle);
+        addRect(artX, artY, artSize, artSize, tile, 10 * s);
+        addCircle(artX + 22 * s, artY + 22 * s, 15 * s,
+                  dark ? 0xCC101010u : 0xCCFFFFFFu);
+        addCircle(artX + 22 * s, artY + 22 * s, 4.5f * s, tile);
+        addCircle(artX + 22 * s, artY + 22 * s, 2 * s,
+                  dark ? 0xFF101010u : 0xFFFFFFFFu);
     }
+    addTextFlow(stripX + 64 * s, stripY + 9 * s, bodyFont + 1 * s, songTitle,
+                226 * s, textC);
+    addTextFlow(stripX + 64 * s, stripY + 31 * s, smallFont, artist,
+                226 * s, mutedC);
 
-    addTextWrapped(bottomX + 102 * scale, bottomY + 12 * scale,
-                   bodyFont, songTitle, 350 * scale,
-                   22 * scale, 2, white);
-    addTextFlow(bottomX + 102 * scale, bottomY + 61 * scale,
-                smallFont, artist, 350 * scale, muted);
-
-    const float centerX = panelX + panelW * 0.5f;
-    const float controlsY = bottomY + 32 * scale;
-    const float offsets[] = {-122, -62, 0, 62, 122, 178};
-    const int controlIds[] = {ControlShuffle, ControlTrackPrev,
-                              ControlPlayPause, ControlTrackNext,
-                              ControlLoop, ControlStop};
-    const float radii[] = {22, 22, 30, 22, 22, 20};
-    for (int i = 0; i < 6; ++i) {
-        const bool active =
-            (controlIds[i] == ControlShuffle &&
-             mConfig->config().shuffleEnabled) ||
-            (controlIds[i] == ControlLoop &&
-             mConfig->config().loopMode != 0);
-        u32 fill = controlIds[i] == ControlPlayPause ? greenBright :
-                   (active ? 0xFF233A2Au : playerSurface);
-        if (mPressedControl == controlIds[i]) fill = hover;
-        addCircle(centerX + offsets[i] * scale, controlsY,
-                  radii[i] * scale, fill);
+    // Transport controls.
+    static const int controlIds[5] = {ControlShuffle, ControlTrackPrev,
+                                      ControlPlayPause, ControlTrackNext,
+                                      ControlLoop};
+    const float controlY = panelY + ControlCenterY * s;
+    const bool shuffleOn = mConfig->config().shuffleEnabled;
+    const int loopMode = mConfig->config().loopMode;
+    for (int i = 0; i < 5; ++i) {
+        const float cx = panelX + ControlCenterX[i] * s;
+        const float r = ControlRadius[i] * s;
+        const bool pressed = mPressedControl == controlIds[i];
+        const bool active = (controlIds[i] == ControlShuffle && shuffleOn) ||
+                            (controlIds[i] == ControlLoop && loopMode != 0);
+        if (controlIds[i] == ControlPlayPause) {
+            addCircle(cx + 1 * s, controlY + 2.5f * s, r, edgeDark);
+            addCircle(cx, controlY, r, pressed ? accentDn : accent);
+        } else if (pressed) {
+            addCircle(cx, controlY, r, insetC);
+        } else if (active) {
+            addCircle(cx, controlY, r, accentSoft);
+        }
     }
-    drawShuffleIcon(centerX + offsets[0] * scale, controlsY,
-                    0.8f * scale,
-                    mConfig->config().shuffleEnabled ? greenBright : muted);
-    drawPreviousIcon(centerX + offsets[1] * scale, controlsY,
-                     0.9f * scale, softWhite);
-    drawPlayPauseIcon(centerX, controlsY, 1.0f * scale,
-                      mSnapshot.playing, 0xFF000000u);
-    drawNextIcon(centerX + offsets[3] * scale, controlsY,
-                 0.9f * scale, softWhite);
-    drawLoopIcon(centerX + offsets[4] * scale, controlsY,
-                 0.8f * scale, mConfig->config().loopMode,
-                 mConfig->config().loopMode != 0 ? greenBright : muted);
-    drawStopIcon(centerX + offsets[5] * scale, controlsY,
-                 0.8f * scale, muted);
+    drawShuffleIcon(panelX + ControlCenterX[0] * s, controlY, 0.7f * s,
+                    shuffleOn ? accent : softC);
+    drawPreviousIcon(panelX + ControlCenterX[1] * s, controlY, 0.72f * s, softC);
+    drawPlayPauseIcon(panelX + ControlCenterX[2] * s, controlY, 0.85f * s,
+                      playing, onAccent);
+    drawNextIcon(panelX + ControlCenterX[3] * s, controlY, 0.72f * s, softC);
+    drawLoopIcon(panelX + ControlCenterX[4] * s, controlY, 0.7f * s, loopMode,
+                 loopMode != 0 ? accent : softC);
 
-    const float progressX = centerX - 250 * scale;
-    const float progressY = bottomY + 72 * scale;
-    const float progressW = 500 * scale;
+    // Seek bar with elapsed / total time.
+    const float barY = panelY + (PlayerY + 62.0f) * s;
+    const float seekX = panelX + SeekX * s;
+    const float seekW = SeekW * s;
     const float progress = mSnapshot.durationMs > 0
         ? clampFloat(static_cast<float>(mSnapshot.positionMs) /
                      static_cast<float>(mSnapshot.durationMs), 0.0f, 1.0f)
         : 0.0f;
-    addRect(progressX, progressY, progressW, 4 * scale,
-            divider, 2 * scale);
-    addRect(progressX, progressY, progressW * progress,
-            4 * scale, mPressedControl == ControlSeek ? greenBright : white,
-            2 * scale);
-    if (mPressedControl == ControlSeek)
-        addCircle(progressX + progressW * progress,
-                  progressY + 2 * scale, 6 * scale, white);
     char elapsed[16]{};
     char duration[16]{};
     formatTime(mSnapshot.positionMs, elapsed, sizeof(elapsed));
     formatTime(mSnapshot.durationMs, duration, sizeof(duration));
-    addTextRight(progressX - 10 * scale, progressY - 4 * scale,
-                 smallFont, elapsed, muted);
-    addText(progressX + progressW + 10 * scale,
-            progressY - 4 * scale, smallFont, duration, muted);
+    addText(stripX + 10 * s, barY - 7 * s, smallFont, elapsed, mutedC);
+    addText(seekX + seekW + 8 * s, barY - 7 * s, smallFont, duration, mutedC);
+    addRect(seekX, barY - 2 * s, seekW, 4 * s, insetC, 2 * s);
+    if (progress > 0.0f)
+        addRect(seekX, barY - 2 * s, maxFloat(4 * s, seekW * progress),
+                4 * s, accent, 2 * s);
+    addCircle(seekX + seekW * progress, barY,
+              (mPressedControl == ControlSeek ? 7.0f : 5.0f) * s, textC);
 
-    const float visualX = bottomX + bottomW - 210 * scale;
-    const float visualY = bottomY + 13 * scale;
-    for (int bar = 0; bar < 16; ++bar) {
-        const float height = (3.0f + mSpectrum[bar] * 20.0f) * scale;
-        addRect(visualX + bar * 9 * scale,
-                visualY + 23 * scale - height,
-                5 * scale, height,
-                mSnapshot.playing ? green : dim, 2 * scale);
-    }
-    const float right = panelX + panelW - 16 * scale;
-    drawVolumeIcon(right - 209 * scale, bottomY + 59 * scale,
-                   0.75f * scale,
-                   mConfig->config().volumePercent == 0, muted);
-    const float volumeX = right - 186 * scale;
-    const float volumeY = bottomY + 57 * scale;
-    const float volumeW = 170 * scale;
-    const float volume = mConfig->config().volumePercent / 100.0f;
-    addRect(volumeX, volumeY, volumeW, 4 * scale,
-            divider, 2 * scale);
-    addRect(volumeX, volumeY, volumeW * volume,
-            4 * scale, mPressedControl == ControlVolumeBar
-                ? greenBright : white, 2 * scale);
-    if (mPressedControl == ControlVolumeBar)
-        addCircle(volumeX + volumeW * volume,
-                  volumeY + 2 * scale, 5 * scale, white);
+    // Volume.
+    const int volumePercent = mConfig->config().volumePercent;
+    const float volume = volumePercent / 100.0f;
+    const float volX = panelX + VolX * s;
+    const float volW = VolW * s;
+    drawVolumeIcon(panelX + 376 * s, barY, 0.7f * s, volumePercent == 0,
+                   mPressedControl == ControlMute ? accent : mutedC);
+    addRect(volX, barY - 2 * s, volW, 4 * s, insetC, 2 * s);
+    if (volume > 0.0f)
+        addRect(volX, barY - 2 * s, volW * volume, 4 * s,
+                mPressedControl == ControlVolumeBar ? accent : softC, 2 * s);
+    addCircle(volX + volW * volume, barY,
+              (mPressedControl == ControlVolumeBar ? 6.0f : 4.0f) * s, textC);
 
     mApi->submitDrawCommands(ModuleId, strlen(ModuleId), mCommands,
                              static_cast<usize>(mCommandCount));
     mVisible = mCommandCount > 0 ? 1 : 0;
 }
-
