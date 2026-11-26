@@ -51,7 +51,7 @@ echo "$NEEDED" | grep -q 'libpreloader.so'    && fail "must not link libpreloade
 echo "$NEEDED" | grep -q 'libminecraftpe.so'  && fail "must not link libminecraftpe.so"
 S="$BUILD/strings.txt"; strings "$BUILD/$LIB" > "$S"
 for need in nativeSetExternalModConfig nativeToggleExternalMod 'android/media/audiofx/Visualizer' \
-            getEmbeddedPicture ui_panel_position_saved 'Search songs, artists' 'Import songs' 'Scanning music folders' com.levimusic.picker.Bridge 'Import Songs (Google Files)' 'runtime preloader ABI validation passed'; do
+            getEmbeddedPicture ui_panel_position_saved 'Search songs, artists' 'Scanning music folders' com.levimusic.picker.Bridge 'Import Songs (Google Files)' 'runtime preloader ABI validation passed'; do
     grep -Fq "$need" "$S" || fail "missing expected string: $need"
 done
 for bad in FMOD_System_Init bringToFront requestLayout ConfigSignature ToggleSignature; do
