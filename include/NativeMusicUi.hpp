@@ -19,6 +19,8 @@ public:
     void refresh();
     void redraw();
     bool isOpen() const { return mOpen != 0; }
+    // Called after the "Show floating button" setting changed.
+    void onFloatingButtonSettingChanged();
 
 private:
     static bool touchThunk(int action, int pointerId, float x, float y);
@@ -42,6 +44,14 @@ private:
     void stopAnimationThread();
     void initializeSettingsEntries();
     void setOpenInternal(bool open);
+    // Floating headphone button (shows/hides the panel).
+    bool handleButtonTouch(int action, int pointerId, float x, float y);
+    void calculateButtonLayout(float& x, float& y, float& diameter);
+    void drawFloatingButton();
+    void drawHeadphoneIcon(float centerX, float centerY, float scale,
+                           u32 color);
+    void setPanelShownUnlocked(bool shown);
+    void saveButtonPosition();
     void refreshViewport();
     void restorePanelUiState();
     void savePanelUiState();
@@ -177,13 +187,25 @@ private:
     float mPanelY{};
     float mPanelW{};
     float mPanelH{};
+    float mBtnX{};
+    float mBtnY{};
+    float mBtnDragOffX{};
+    float mBtnDragOffY{};
+    float mBtnDownX{};
+    float mBtnDownY{};
+    volatile int mBtnPointerId{-1};
+    bool mBtnPositionValid{};
+    bool mBtnPressed{};
+    bool mBtnMoved{};
+    int mLastBtnSig{-1};
     float mDragOffsetX{};
     float mDragOffsetY{};
 
     PThread mAnimationThread{};
     volatile int mUiBusy{};
     volatile int mAnimationStop{};
-    volatile int mOpen{};
+    volatile int mOpen{};        // module enabled (button + panel allowed)
+    volatile int mPanelShown{};  // player panel currently visible
     volatile int mVisible{};
     volatile u32 mCapturedPointerMask{};
     bool mRegistered{};

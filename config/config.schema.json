@@ -64,6 +64,29 @@
     "shuffle_enabled": {
       "type": "boolean"
     },
+    "show_floating_button": {
+      "description": "Show the floating headphone button that shows/hides the player panel.",
+      "type": "boolean",
+      "default": true
+    },
+    "ui_button_x": {
+      "description": "Auto-saved floating button X position in screen pixels.",
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 16384,
+      "default": 0
+    },
+    "ui_button_y": {
+      "description": "Auto-saved floating button Y position in screen pixels.",
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 16384,
+      "default": 0
+    },
+    "ui_button_position_saved": {
+      "type": "boolean",
+      "default": false
+    },
     "ui_panel_x": {
       "description": "Auto-saved panel X position in screen pixels.",
       "type": "integer",

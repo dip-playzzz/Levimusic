@@ -242,6 +242,9 @@ void NativeMusicUi::initializeSettingsEntries() {
     setConfigEntry(mSettings[mSettingCount++], "shuffle_enabled", "Shuffle",
                    leviabi::ConfigType::Toggle,
                    mConfig->config().shuffleEnabled ? "true" : "false");
+    setConfigEntry(mSettings[mSettingCount++], "show_floating_button",
+                   "Show Floating Button", leviabi::ConfigType::Toggle,
+                   mConfig->config().showFloatingButton ? "true" : "false");
     setConfigEntry(mSettings[mSettingCount++], "pause_playback",
                    "Pause Playback", leviabi::ConfigType::Button, "");
     setConfigEntry(mSettings[mSettingCount++], "stop_playback",
@@ -267,7 +270,11 @@ void NativeMusicUi::shutdown() {
     savePanelUiState();
     setSearchActive(false);
     mOpen = 0;
+    mPanelShown = 0;
     mVisible = 0;
+    mBtnPointerId = -1;
+    mBtnPressed = false;
+    mBtnMoved = false;
     mCapturedPointerMask = 0;
     mDragging = false;
     mDragPointerId = -1;
@@ -282,7 +289,11 @@ void NativeMusicUi::shutdown() {
 
 bool NativeMusicUi::touchThunk(int action, int pointerId, float x, float y) {
     NativeMusicUi* self = gNativeMusicUi;
-    if (!self || __atomic_load_n(&self->mOpen, __ATOMIC_ACQUIRE) == 0 ||
+    if (!self || __atomic_load_n(&self->mOpen, __ATOMIC_ACQUIRE) == 0)
+        return false;
+    // The floating button sits on top of everything, so it sees touches first.
+    if (self->handleButtonTouch(action, pointerId, x, y)) return true;
+    if (__atomic_load_n(&self->mPanelShown, __ATOMIC_ACQUIRE) == 0 ||
         __atomic_load_n(&self->mVisible, __ATOMIC_ACQUIRE) == 0) return false;
 
     const u32 pointerBit = 1u << (static_cast<u32>(pointerId) & 31u);
@@ -313,14 +324,16 @@ bool NativeMusicUi::touchThunk(int action, int pointerId, float x, float y) {
 bool NativeMusicUi::keyThunk(int keyCode, unsigned int unicodeChar,
                              bool isKeyDown) {
     NativeMusicUi* self = gNativeMusicUi;
-    if (!self || __atomic_load_n(&self->mOpen, __ATOMIC_ACQUIRE) == 0)
+    if (!self || __atomic_load_n(&self->mOpen, __ATOMIC_ACQUIRE) == 0 ||
+        __atomic_load_n(&self->mPanelShown, __ATOMIC_ACQUIRE) == 0)
         return false;
     return self->onKey(keyCode, unicodeChar, isKeyDown);
 }
 
 bool NativeMusicUi::textThunk(const char* text, usize size) {
     NativeMusicUi* self = gNativeMusicUi;
-    if (!self || __atomic_load_n(&self->mOpen, __ATOMIC_ACQUIRE) == 0)
+    if (!self || __atomic_load_n(&self->mOpen, __ATOMIC_ACQUIRE) == 0 ||
+        __atomic_load_n(&self->mPanelShown, __ATOMIC_ACQUIRE) == 0)
         return false;
     return self->onText(text, size);
 }
@@ -373,6 +386,7 @@ void* NativeMusicUi::animationThreadThunk(void* pointer) {
                 self->mPlayer->setLooping(false);
                 self->rescanLibraryPreservingState();
                 self->mPanelPositionValid = false;
+                self->mBtnPositionValid = false;
                 if (__atomic_load_n(&self->mOpen,
                                     __ATOMIC_ACQUIRE) != 0)
                     self->renderUnlocked();
@@ -422,7 +436,20 @@ void* NativeMusicUi::animationThreadThunk(void* pointer) {
             ScopedUiBusy guard(&self->mUiBusy, false);
             if (guard.locked()) {
                 self->tickPlaybackUnlocked();
-                if (__atomic_load_n(&self->mOpen, __ATOMIC_ACQUIRE) != 0) {
+                if (__atomic_load_n(&self->mOpen, __ATOMIC_ACQUIRE) != 0 &&
+                    __atomic_load_n(&self->mPanelShown,
+                                    __ATOMIC_ACQUIRE) == 0 &&
+                    self->mConfig->config().showFloatingButton) {
+                    // Panel hidden: only the button's "playing" dot can change.
+                    const int btnSig = (self->mSnapshot.playing ? 1 : 0) |
+                                       (self->mSnapshot.paused ? 2 : 0) |
+                                       (self->mSnapshot.hasMedia ? 4 : 0);
+                    if (btnSig != self->mLastBtnSig) {
+                        self->mLastBtnSig = btnSig;
+                        self->renderUnlocked();
+                    }
+                } else if (__atomic_load_n(&self->mOpen,
+                                           __ATOMIC_ACQUIRE) != 0) {
                     // Redraw only when something visible can have changed.
                     bool redraw = false;
                     if (self->mFilterDirty) {
@@ -554,6 +581,13 @@ void NativeMusicUi::setOpenInternal(bool open) {
     ScopedUiBusy guard(&mUiBusy, true);
     const bool wasOpen = mOpen != 0;
     mOpen = open ? 1 : 0;
+    // Enabling the module in the Mod Menu shows the panel (as before); the
+    // floating button can then hide/show it without touching the Mod Menu.
+    mPanelShown = open ? 1 : 0;
+    mBtnPointerId = -1;
+    mBtnPressed = false;
+    mBtnMoved = false;
+    mLastBtnSig = -1;
     if (!open) {
         if (wasOpen || mPanelPositionValid) savePanelUiState();
         mVisible = 0;
@@ -1145,7 +1179,7 @@ void NativeMusicUi::activateControl(int control) {
 
 bool NativeMusicUi::onTouch(const leviabi::TouchEvent& event) {
     ScopedUiBusy guard(&mUiBusy, true);
-    if (!mOpen) return false;
+    if (!mOpen || !mPanelShown) return false;
     float panelX{}, panelY{}, panelW{}, panelH{}, scale{};
     calculateLayout(panelX, panelY, panelW, panelH, scale);
     const bool inside = hit(event.x, event.y, panelX, panelY,
@@ -1422,7 +1456,8 @@ void NativeMusicUi::redraw() {
 
 void NativeMusicUi::tickPlaybackUnlocked() {
     mPlayer->snapshot(mSnapshot);
-    const bool uiOpen = __atomic_load_n(&mOpen, __ATOMIC_ACQUIRE) != 0;
+    const bool uiOpen = __atomic_load_n(&mOpen, __ATOMIC_ACQUIRE) != 0 &&
+                        __atomic_load_n(&mPanelShown, __ATOMIC_ACQUIRE) != 0;
     // The visualizer is polled over JNI, so only do it at the redraw rate
     // while something is actually playing.
     if (uiOpen && mSnapshot.playing && (mAnimationFrame % 3) == 0)
@@ -1884,6 +1919,14 @@ void NativeMusicUi::renderUnlocked() {
         mVisible = 0;
         return;
     }
+    if (!mPanelShown) {
+        // Panel hidden: draw only the floating button (if enabled).
+        drawFloatingButton();
+        mApi->submitDrawCommands(ModuleId, strlen(ModuleId), mCommands,
+                                 static_cast<usize>(mCommandCount));
+        mVisible = 0;
+        return;
+    }
     if (mFilterDirty) rebuildVisibleIndex();
 
     float panelX{}, panelY{}, panelW{}, panelH{}, s{};
@@ -2207,7 +2250,213 @@ void NativeMusicUi::renderUnlocked() {
     addCircle(volX + volW * volume, barY,
               (mPressedControl == ControlVolumeBar ? 6.0f : 4.0f) * s, textC);
 
+    // The floating button is drawn last so it stays on top of the panel.
+    drawFloatingButton();
+
     mApi->submitDrawCommands(ModuleId, strlen(ModuleId), mCommands,
                              static_cast<usize>(mCommandCount));
     mVisible = mCommandCount > 0 ? 1 : 0;
+}
+
+// ---------------------------------------------------------------------------
+// Floating headphone button
+// ---------------------------------------------------------------------------
+
+void NativeMusicUi::calculateButtonLayout(float& x, float& y, float& d) {
+    const float screenW = static_cast<float>(mViewportWidth);
+    const float screenH = static_cast<float>(mViewportHeight);
+    const float scale = clampFloat(
+        mConfig->config().uiScalePercent / 100.0f, 0.5f, 1.4f);
+    d = maxFloat(56.0f, 68.0f * scale);
+    if (!mBtnPositionValid) {
+        if (mConfig->config().uiButtonPositionSaved) {
+            mBtnX = static_cast<float>(mConfig->config().uiButtonX);
+            mBtnY = static_cast<float>(mConfig->config().uiButtonY);
+        } else {
+            // Default: right edge, below the launcher's own round button.
+            mBtnX = screenW * 0.957f - d * 0.5f;
+            mBtnY = screenH * 0.26f - d * 0.5f;
+        }
+        mBtnPositionValid = true;
+    }
+    mBtnX = clampFloat(mBtnX, 0.0f, maxFloat(0.0f, screenW - d));
+    mBtnY = clampFloat(mBtnY, 0.0f, maxFloat(0.0f, screenH - d));
+    x = mBtnX;
+    y = mBtnY;
+}
+
+void NativeMusicUi::saveButtonPosition() {
+    mConfig->saveButtonPosition(static_cast<int>(mBtnX),
+                                static_cast<int>(mBtnY), true);
+}
+
+void NativeMusicUi::drawHeadphoneIcon(float cx, float cy, float s, u32 color) {
+    // Headband: upper half circle (radius 11) as 8 rounded segments.
+    static const float cosv[9] = {-1.0f, -0.9239f, -0.7071f, -0.3827f, 0.0f,
+                                  0.3827f, 0.7071f, 0.9239f, 1.0f};
+    static const float sinv[9] = {0.0f, 0.3827f, 0.7071f, 0.9239f, 1.0f,
+                                  0.9239f, 0.7071f, 0.3827f, 0.0f};
+    const float R = 11.0f * s;
+    const float top = cy - 1.0f * s;          // icon is ~23 units tall
+    float px = 0.0f, py = 0.0f;
+    for (int i = 0; i < 9; ++i) {
+        const float x = cx + R * cosv[i];
+        const float y = top - R * sinv[i] + 1.0f * s;
+        addCircle(x, y, 1.6f * s, color);
+        if (i > 0) addLine(px, py, x, y, 3.2f * s, color);
+        px = x;
+        py = y;
+    }
+    // Ear cups.
+    addRect(cx - R - 3.6f * s, top + 0.5f * s, 7.2f * s, 11.0f * s, color,
+            3.2f * s);
+    addRect(cx + R - 3.6f * s, top + 0.5f * s, 7.2f * s, 11.0f * s, color,
+            3.2f * s);
+}
+
+void NativeMusicUi::drawFloatingButton() {
+    if (!mConfig || !mConfig->config().showFloatingButton) return;
+    float bx{}, by{}, d{};
+    calculateButtonLayout(bx, by, d);
+    const bool dark = useDarkTheme();
+    const float r = d * 0.5f;
+    const float cx = bx + r;
+    const float cy = by + r;
+    const bool active = mPanelShown != 0;
+
+    const u32 faceC   = dark ? 0xF21B1E25u : 0xF2E9ECF2u;
+    const u32 ringC   = dark ? 0x30FFFFFFu : 0x40000000u;
+    const u32 shadowC = dark ? 0x66000000u : 0x33000000u;
+    const u32 textC   = dark ? 0xFFF2F4F8u : 0xFF1B1E25u;
+    const u32 accent  = dark ? 0xFF52E3A4u : 0xFF12A56Eu;
+    const u32 pressC  = dark ? 0x26FFFFFFu : 0x26000000u;
+
+    addCircle(cx + 1.5f, cy + 3.0f, r + 1.0f, shadowC);
+    addCircle(cx, cy, r, ringC);
+    addCircle(cx, cy, r - 1.5f, faceC);
+    if (mBtnPressed) addCircle(cx, cy, r - 1.5f, pressC);
+    drawHeadphoneIcon(cx, cy + d * 0.02f, d * 0.02f,
+                      active ? accent : textC);
+    // Small dot when music is playing while the panel is hidden.
+    if (!active && mSnapshot.playing)
+        addCircle(cx + r * 0.62f, cy - r * 0.62f, d * 0.085f, accent);
+}
+
+bool NativeMusicUi::handleButtonTouch(int action, int pointerId,
+                                      float x, float y) {
+    if (!mConfig || !mConfig->config().showFloatingButton) return false;
+    const bool isDown = action == 0 || action == 5;
+    // Fast path without locking: only a finger-down can start a button
+    // gesture, afterwards only that pointer's events matter.
+    if (!isDown && (mBtnPointerId < 0 ||
+                    (action != 3 && pointerId != mBtnPointerId)))
+        return false;
+
+    ScopedUiBusy guard(&mUiBusy, true);
+    if (!mOpen) return false;
+    float bx{}, by{}, d{};
+    calculateButtonLayout(bx, by, d);
+    const float r = d * 0.5f;
+    const float cx = bx + r;
+    const float cy = by + r;
+    const float dx = x - cx;
+    const float dy = y - cy;
+    const bool inside = dx * dx + dy * dy <= r * r * 1.21f;
+
+    if (isDown) {
+        if (mBtnPointerId >= 0 || !inside) return false;
+        mBtnPointerId = pointerId;
+        mBtnPressed = true;
+        mBtnMoved = false;
+        mBtnDownX = x;
+        mBtnDownY = y;
+        mBtnDragOffX = x - bx;
+        mBtnDragOffY = y - by;
+        renderUnlocked();
+        return true;
+    }
+    if (mBtnPointerId < 0) return false;
+
+    if (action == 3) {   // cancelled: forget the gesture, let others see it
+        const bool moved = mBtnMoved;
+        mBtnPointerId = -1;
+        mBtnPressed = false;
+        mBtnMoved = false;
+        if (moved) saveButtonPosition();
+        renderUnlocked();
+        return false;
+    }
+    if (pointerId != mBtnPointerId) return false;
+
+    if (action == 2) {
+        const float mx = x - mBtnDownX;
+        const float my = y - mBtnDownY;
+        const float threshold = maxFloat(12.0f, d * 0.2f);
+        if (!mBtnMoved && mx * mx + my * my > threshold * threshold)
+            mBtnMoved = true;
+        if (mBtnMoved) {
+            mBtnX = x - mBtnDragOffX;
+            mBtnY = y - mBtnDragOffY;
+            renderUnlocked();
+        }
+        return true;
+    }
+    if (action == 1 || action == 6) {
+        const bool moved = mBtnMoved;
+        mBtnPointerId = -1;
+        mBtnPressed = false;
+        mBtnMoved = false;
+        if (moved) {
+            saveButtonPosition();
+            renderUnlocked();
+        } else if (inside) {
+            setPanelShownUnlocked(mPanelShown == 0);
+        } else {
+            renderUnlocked();
+        }
+        return true;
+    }
+    return true;
+}
+
+// Caller holds mUiBusy.
+void NativeMusicUi::setPanelShownUnlocked(bool shown) {
+    if (!mOpen) return;
+    if (shown == (mPanelShown != 0)) {
+        renderUnlocked();
+        return;
+    }
+    if (!shown) {
+        if (mPanelPositionValid) savePanelUiState();
+        setSearchActive(false);
+        mPanelShown = 0;
+        mVisible = 0;
+        mDragging = false;
+        mDragPointerId = -1;
+        mPressedControl = 0;
+        mScrollTouching = false;
+        mScrolling = false;
+        mScrollPointerId = -1;
+        mFlingVel = 0.0f;
+        mCapturedPointerMask = 0;
+        mLastBtnSig = -1;
+    } else {
+        mPanelShown = 1;
+        refreshViewport();
+        mPlayer->snapshot(mSnapshot);
+        mLastUiSig = -1;
+        markFilterDirty();
+    }
+    renderUnlocked();
+}
+
+void NativeMusicUi::onFloatingButtonSettingChanged() {
+    ScopedUiBusy guard(&mUiBusy, true);
+    if (!mOpen) return;
+    // Without the button there would be no way to bring a hidden panel back.
+    if (!mConfig->config().showFloatingButton && !mPanelShown) {
+        setPanelShownUnlocked(true);
+        return;
+    }
+    renderUnlocked();
 }

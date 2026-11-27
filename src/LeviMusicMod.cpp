@@ -72,6 +72,10 @@ void LeviMusicMod::applySetting(const char* key, const char* value) {
         mConfig.setShuffleEnabled(parseSettingBool(
             value, mConfig.config().shuffleEnabled));
         mUi.redraw();
+    } else if (strcmp(key, "show_floating_button") == 0) {
+        mConfig.setShowFloatingButton(parseSettingBool(
+            value, mConfig.config().showFloatingButton));
+        mUi.onFloatingButtonSettingChanged();
     } else if (strcmp(key, "pause_playback") == 0) {
         mPlayer.pause();
         mUi.redraw();

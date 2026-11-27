@@ -43,6 +43,10 @@ void ConfigManager::defaults() {
     mConfig.uiPage = 0;
     mConfig.uiSourceOffset = 0;
     mConfig.uiActivePlaylist[0] = 0;
+    mConfig.showFloatingButton = true;
+    mConfig.uiButtonX = 0;
+    mConfig.uiButtonY = 0;
+    mConfig.uiButtonPositionSaved = false;
     // Songs imported with the in-game picker live here and are always scanned.
     // The launcher's own app-specific media folder needs no storage permission
     // and survives launcher updates; Google Files can also copy songs into it.
@@ -215,6 +219,14 @@ void ConfigManager::load() {
     if (mConfig.uiSourceOffset < 0) mConfig.uiSourceOffset = 0;
     parseString(json, "ui_active_playlist", mConfig.uiActivePlaylist,
                 sizeof(mConfig.uiActivePlaylist));
+    mConfig.showFloatingButton = parseBoolean(
+        json, "show_floating_button", true);
+    mConfig.uiButtonX = parseInteger(json, "ui_button_x", mConfig.uiButtonX);
+    mConfig.uiButtonY = parseInteger(json, "ui_button_y", mConfig.uiButtonY);
+    if (mConfig.uiButtonX < 0) mConfig.uiButtonX = 0;
+    if (mConfig.uiButtonY < 0) mConfig.uiButtonY = 0;
+    mConfig.uiButtonPositionSaved = parseBoolean(
+        json, "ui_button_position_saved", false);
 
 }
 
@@ -252,7 +264,11 @@ void ConfigManager::writeConfig() {
                    "  \"ui_sort_mode\": %d,\n"
                    "  \"ui_page\": %d,\n"
                    "  \"ui_source_offset\": %d,\n"
-                   "  \"ui_active_playlist\": \"%s\"\n}\n",
+                   "  \"ui_active_playlist\": \"%s\",\n"
+                   "  \"show_floating_button\": %s,\n"
+                   "  \"ui_button_x\": %d,\n"
+                   "  \"ui_button_y\": %d,\n"
+                   "  \"ui_button_position_saved\": %s\n}\n",
                    mConfig.selectedAudio, mConfig.maxTracks,
                    mConfig.uiWidth, mConfig.uiHeight, mConfig.volumePercent,
                    mConfig.uiOpacityPercent, mConfig.uiScalePercent,
@@ -262,7 +278,10 @@ void ConfigManager::writeConfig() {
                    mConfig.uiPanelX, mConfig.uiPanelY,
                    mConfig.uiPanelPositionSaved ? "true" : "false",
                    mConfig.uiSortMode, mConfig.uiPage, mConfig.uiSourceOffset,
-                   mConfig.uiActivePlaylist);
+                   mConfig.uiActivePlaylist,
+                   mConfig.showFloatingButton ? "true" : "false",
+                   mConfig.uiButtonX, mConfig.uiButtonY,
+                   mConfig.uiButtonPositionSaved ? "true" : "false");
     write(fd, json, static_cast<usize>(at));
     close(fd);
     rename(temp, mConfigPath);
@@ -338,6 +357,21 @@ void ConfigManager::setShuffleEnabled(bool enabled) {
     writeConfig();
 }
 
+
+void ConfigManager::setShowFloatingButton(bool enabled) {
+    mConfig.showFloatingButton = enabled;
+    writeConfig();
+}
+
+void ConfigManager::saveButtonPosition(int buttonX, int buttonY,
+                                       bool positionSaved) {
+    if (buttonX < 0) buttonX = 0;
+    if (buttonY < 0) buttonY = 0;
+    mConfig.uiButtonX = buttonX;
+    mConfig.uiButtonY = buttonY;
+    mConfig.uiButtonPositionSaved = positionSaved;
+    writeConfig();
+}
 
 void ConfigManager::savePanelUiState(int panelX, int panelY,
                                      bool positionSaved,

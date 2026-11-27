@@ -26,6 +26,12 @@ struct LeviMusicConfig {
     int uiPage;
     int uiSourceOffset;
     char uiActivePlaylist[512];
+
+    // Floating headphone button that shows/hides the player panel.
+    bool showFloatingButton;
+    int uiButtonX;
+    int uiButtonY;
+    bool uiButtonPositionSaved;
 };
 
 class ConfigManager {
@@ -43,6 +49,8 @@ public:
     void setMaxTracks(int maxTracks);
     void setLoopMode(int loopMode);
     void setShuffleEnabled(bool enabled);
+    void setShowFloatingButton(bool enabled);
+    void saveButtonPosition(int buttonX, int buttonY, bool positionSaved);
     void savePanelUiState(int panelX, int panelY, bool positionSaved,
                           const char* activePlaylist, int sortMode,
                           int page, int sourceOffset);

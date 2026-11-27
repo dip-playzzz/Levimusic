@@ -21,5 +21,9 @@
   "ui_sort_mode": 0,
   "ui_page": 0,
   "ui_source_offset": 0,
-  "ui_active_playlist": ""
+  "ui_active_playlist": "",
+  "show_floating_button": true,
+  "ui_button_x": 0,
+  "ui_button_y": 0,
+  "ui_button_position_saved": false
 }

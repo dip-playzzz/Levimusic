@@ -23,6 +23,10 @@ against the current `libpreloader.so`.
   library limit, loop, shuffle, Pause/Stop and Import Songs buttons
 - Panel position, page, sort and playlist are remembered
 - Never autoplays on game start
+- Floating headphone button: tap it to show/hide the player panel without
+  opening the Mod Menu; drag it to move it (position is remembered). A green
+  dot appears on it while music plays with the panel hidden. Turn it off with
+  "Show Floating Button" in the Mod Menu or `show_floating_button` in config.
 
 ## Importing songs
 Open the **LeviMusic module** in the Mod Menu and press **Import Songs (Google
